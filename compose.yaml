@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: rag
       POSTGRES_PASSWORD: rag          # local only; never reused anywhere else
     ports:
-      - "5432:5432"                   # use "5433:5432" if a local Postgres already uses 5432
+      - "5433:5432"                   # use "5433:5432" if a local Postgres already uses 5432
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
