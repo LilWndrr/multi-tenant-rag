@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -43,5 +44,16 @@ public class ApiKeyRepository {
         where id = :id and tenant_id = :tenantId
         """).param("id",id).param("tenantId",tenantId).update()==1;
 
+    }
+
+    public Optional<AuthenticatedKey> getApiKeyByHash (byte[] hashKey){
+    return     jdbc.sql("""
+        select k.id as api_key_id, k.tenant_id, t.language_profile
+        from api_keys k
+        join tenants t on t.id = k.tenant_id
+        where k.key_hash = :hash and k.revoked_at is null
+        """)
+            .param("hash",hashKey)
+            .query(AuthenticatedKey.class).optional();
     }
 }
