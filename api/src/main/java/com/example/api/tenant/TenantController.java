@@ -4,6 +4,7 @@ import com.example.api.apiKey.ApiKey;
 import com.example.api.apiKey.ApiKeyService;
 import com.example.api.apiKey.CreateApiKeyRequest;
 import com.example.api.apiKey.CreatedApiKey;
+import com.example.common.profile.LanguageProfiles;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.CacheControl;
@@ -21,17 +22,18 @@ public class TenantController {
 
     private final TenantService tenantService;
     private final ApiKeyService apiKeyService;
+    private final LanguageProfiles languageProfiles;
 
-    public TenantController(TenantService tenantService, ApiKeyService apiKeyService) {
+    public TenantController(TenantService tenantService, ApiKeyService apiKeyService, LanguageProfiles languageProfiles) {
         this.tenantService = tenantService;
-
         this.apiKeyService = apiKeyService;
+        this.languageProfiles = languageProfiles;
     }
 
     @PostMapping
     public ResponseEntity<Tenant> create(@RequestBody TenantCreateRequest request){
         if (request.name() == null || request.name().isBlank()
-                || !("en".equals(request.languageProfile()) || "tr".equals(request.languageProfile()))) {
+                || !languageProfiles.exists(request.languageProfile())) {
             return ResponseEntity.badRequest().build();
         }
         return ResponseEntity.status(HttpStatus.CREATED).body(tenantService.create(request.name(),request.languageProfile()));

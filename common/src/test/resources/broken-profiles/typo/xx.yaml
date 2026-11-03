@@ -1,0 +1,9 @@
+embedding-model: some/model
+reranker: null
+chunk:
+  size: 100
+  overlap: 10
+text-search: simple
+prompts:
+  system: "answer"
+  no-answer: "none"

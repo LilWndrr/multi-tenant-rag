@@ -1,0 +1,12 @@
+# Everything language-specific lives here; Java code only sees the profile id ("tr").
+embedding-model: nvidia/nemotron-3.5-embed-1b:free
+reranker: null            # no reranker until the retrieval phase
+chunk:
+  size: 400               # tokens, sized with jtokkit
+  overlap: 50
+text-search-config: turkish   # Postgres regconfig for to_tsvector / websearch_to_tsquery
+prompts:
+  system: |
+    Soruları yalnızca verilen bağlamı kullanarak yanıtla.
+    Kullandığın kaynakları belirt. Bağlamda yanıt yoksa bunu açıkça söyle.
+  no-answer: "Belgelerinizde bu soruya bir yanıt bulamadım."

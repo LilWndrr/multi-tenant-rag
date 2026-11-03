@@ -1,0 +1,12 @@
+# Everything language-specific lives here; Java code only sees the profile id ("en").
+embedding-model: nvidia/nemotron-3.5-embed-1b:free
+reranker: null            # no reranker until the retrieval phase
+chunk:
+  size: 400               # tokens, sized with jtokkit
+  overlap: 50
+text-search-config: english   # Postgres regconfig for to_tsvector / websearch_to_tsquery
+prompts:
+  system: |
+    You answer questions using only the provided context.
+    Cite the sources you used. If the context does not contain the answer, say so.
+  no-answer: "I could not find an answer to that in your documents."
