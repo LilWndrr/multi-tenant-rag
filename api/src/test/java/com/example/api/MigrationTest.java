@@ -27,7 +27,7 @@ class MigrationTest {
     LanguageProfiles profiles;
 
     @Test
-    void latestAppliedVersionIsV2() {
+    void latestAppliedVersionIsV3() {
         String version = jdbc.sql("""
                         SELECT version FROM flyway_schema_history
                         WHERE success ORDER BY installed_rank DESC LIMIT 1
@@ -35,7 +35,7 @@ class MigrationTest {
                 .query(String.class)
                 .single();
 
-        assertThat(version).isEqualTo("2");
+        assertThat(version).isEqualTo("3");
     }
 
     @Test
@@ -109,6 +109,7 @@ class MigrationTest {
     @Transactional
     void chunkTsvectorIsStemmedWithItsOwnTextSearchConfig() {
         UUID tenantId = insertTenant("stems-test");
+        actAs(tenantId);
         UUID documentId = insertDocument(tenantId, "aa");
 
         String text = "kitaplar okudum";
@@ -124,10 +125,13 @@ class MigrationTest {
     void sameChecksum_isAllowedForAnotherTenant_butNotTwiceForOne() {
         UUID tenantA = insertTenant("checksum-a");
         UUID tenantB = insertTenant("checksum-b");
+        actAs(tenantA);
         insertDocument(tenantA, "bb");
 
+        actAs(tenantB);
         insertDocument(tenantB, "bb");   // another tenant must not learn that A has this file
 
+        actAs(tenantA);
         assertThatThrownBy(() -> insertDocument(tenantA, "bb"))
                 .isInstanceOf(DuplicateKeyException.class);
     }
@@ -136,6 +140,7 @@ class MigrationTest {
     @Transactional
     void deletingDocument_removesItsChunksEmbeddingsAndJobs() {
         UUID tenantId = insertTenant("doc-cascade");
+        actAs(tenantId);
         UUID documentId = insertDocument(tenantId, "cc");
         long chunkId = insertChunkId(tenantId, documentId);
         // the vector column has no dimension: two models, two lengths, same chunk
@@ -160,12 +165,21 @@ class MigrationTest {
     @Transactional
     void bgeM3Embedding_withWrongDimension_isRejectedByItsIndex() {
         UUID tenantId = insertTenant("dimension-check");
+        actAs(tenantId);
         long chunkId = insertChunkId(tenantId, insertDocument(tenantId, "dd"));
 
         // the partial HNSW index casts bge-m3 rows to vector(1024), so a 3-dim vector cannot be stored
         assertThatThrownBy(() -> insertEmbedding(chunkId, tenantId, "bge-m3", 3))
                 .isInstanceOf(DataAccessException.class)
                 .hasMessageContaining("1024");
+    }
+
+    // content tables have row-level security (V3); the test transaction acts as this tenant from here on
+    private void actAs(UUID tenantId) {
+        jdbc.sql("select set_config('app.tenant_id', :tenantId, true)")
+                .param("tenantId", tenantId.toString())
+                .query(String.class)
+                .single();
     }
 
     private UUID insertTenant(String name) {
