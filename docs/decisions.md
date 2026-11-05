@@ -29,3 +29,11 @@ Short notes on choices the plan asks us to record: what, why, and the evidence.
 - **Roles:** the app logs in as `rag_app` (no superuser, no `BYPASSRLS`, DML only); Flyway runs as the owner and creates `rag_app` in V3 from placeholders. Superusers ignore RLS even when it's forced, so logging in as `rag` would have made the policies decorative. Chosen over `SET ROLE` per transaction, which a superuser connection can undo.
 - **Not covered:** `tenants`, `api_keys` and `model_calls`: the auth filter looks keys up before the tenant is known, admin endpoints span tenants, and some model calls have no tenant. Code on those tables still filters by `tenant_id` itself.
 - **Evidence:** `RowLevelSecurityTest`: with tenant A's key, `select count(*) from documents` (no where clause) returns 0 while B has rows; no tenant set reads nothing; cross-tenant insert, update and delete are refused; tests run as `rag_app` and assert it can't bypass RLS.
+
+## Task 12: upload order, and what happens when SQS is down (2026-11-04)
+
+- **What:** `POST /v1/documents` checks the file (empty → 400, over 20 MB → 413, type detected from the bytes by Tika, anything but PDF/DOCX/HTML/Markdown → 415), hashes it, returns the tenant's existing document if the checksum is known (200), otherwise puts it in S3 at `{tenantId}/{documentId}`, commits a `queued` row, and only then sends `{documentId, tenantId}` to SQS (202).
+- **Why this order:** S3 and SQS can't join a database transaction. Sending before the commit would let the worker pick up a message for a row it can't see yet; writing S3 first means a committed row always has its file.
+- **SQS failure:** the row is marked `failed` and the client gets 503 to retry. Chosen over a transactional outbox (row + outbox in one transaction, a poller sends) because it needs no extra table or background job; the cost is that a crash between commit and send leaves a `queued` row nobody will process. Revisit with an outbox or a sweeper for old `queued` rows if that shows up.
+- **Duplicates:** the checksum is unique per tenant. Two identical uploads at the same time both pass the check; the loser hits the unique constraint, deletes its S3 copy and returns the winner's id.
+- **Not yet:** a duplicate of a `failed` document returns the failed one, so re-uploading doesn't retry it (Task 17, idempotency).
