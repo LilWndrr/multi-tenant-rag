@@ -26,6 +26,8 @@
         <java.version>21</java.version>
         <spring-ai.version>2.0.2</spring-ai.version>
         <resilience4j.version>2.4.0</resilience4j.version>
+        <aws-java-sdk.version>2.57.8</aws-java-sdk.version>
+        <tika.version>4.2.0</tika.version>
     </properties>
 
     <dependencyManagement>
@@ -41,6 +43,18 @@
                 <version>${spring-ai.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>software.amazon.awssdk</groupId>
+                <artifactId>bom</artifactId>
+                <version>${aws-java-sdk.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-core</artifactId>
+                <version>${tika.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.github.resilience4j</groupId>
