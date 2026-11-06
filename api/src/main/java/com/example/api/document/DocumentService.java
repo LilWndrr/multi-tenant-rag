@@ -1,6 +1,7 @@
 package com.example.api.document;
 
 import com.example.api.tenant.TenantContext;
+import com.example.common.enums.DocumentProcessStatus;
 import com.example.common.ingestion.IngestionMessage;
 import com.example.common.tenant.TenantTransactions;
 import org.apache.tika.Tika;
