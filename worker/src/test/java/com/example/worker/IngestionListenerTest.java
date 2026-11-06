@@ -1,0 +1,206 @@
+package com.example.worker;
+
+import com.example.common.tenant.TenantTransactions;
+import com.example.worker.ingestion.IngestionPipeline;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import software.amazon.awssdk.services.sqs.SqsClient;
+import software.amazon.awssdk.services.sqs.model.Message;
+import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+
+// The real listener against a real queue and DLQ (LocalStack, same init.sh as compose); only the pipeline is replaced.
+// Tests don't run in parallel, so stubbing the shared pipeline mock before sending is safe.
+// Retries wait retry-delay-seconds (1 in tests) x the attempt number, so the 3-attempt test takes seconds.
+@SpringBootTest
+@Import(TestcontainersConfiguration.class)
+class IngestionListenerTest {
+
+    private static final Duration TIMEOUT = Duration.ofSeconds(60);
+
+    @MockitoBean
+    IngestionPipeline pipeline;
+
+    @Autowired
+    SqsClient sqs;
+    @Autowired
+    JdbcClient jdbc;
+    @Autowired
+    TenantTransactions tenantTransactions;
+
+    @Test
+    void alwaysFailingDocument_gets3Attempts_thenFailedWithTheError_andTheMessageMovesToTheDlq() {
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+        doThrow(new RuntimeException("parse failed")).when(pipeline).process(any(), any());
+
+        send(documentId, tenantId);
+
+        // the DLQ first: a 4th attempt could only happen before the message moves, so afterwards the jobs are final
+        String dlqBody = awaitMessageInDlq(documentId);
+        assertThat(dlqBody).contains(tenantId.toString());
+
+        assertThat(jobs(tenantId, documentId)).hasSize(3).allSatisfy(job -> {
+            assertThat(job.get("status")).isEqualTo("failed");
+            assertThat(job.get("error")).isEqualTo("parse failed");
+            assertThat(job.get("finished_at")).isNotNull();
+        });
+        assertThat(jobs(tenantId, documentId)).extracting(job -> job.get("attempt")).containsExactly(1, 2, 3);
+        assertThat(document(tenantId, documentId).get("status")).isEqualTo("failed");
+        assertThat(document(tenantId, documentId).get("error")).isEqualTo("parse failed");
+    }
+
+    @Test
+    void workingDocument_getsOneSucceededJob_isReady_andTheMessageIsDeleted() {
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+
+        send(documentId, tenantId);
+
+        awaitDocumentStatus(tenantId, documentId, "ready");
+        awaitQueueEmpty();
+        verify(pipeline).process(documentId, tenantId);
+        assertThat(jobs(tenantId, documentId)).singleElement().satisfies(job -> {
+            assertThat(job.get("status")).isEqualTo("succeeded");
+            assertThat(job.get("attempt")).isEqualTo(1);
+            assertThat(job.get("error")).isNull();
+            assertThat(job.get("finished_at")).isNotNull();
+        });
+    }
+
+    @Test
+    void failureThenSuccess_keepsBothAttempts_andEndsReady() {
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+        doThrow(new RuntimeException("temporary")).doNothing().when(pipeline).process(any(), any());
+
+        send(documentId, tenantId);
+
+        awaitDocumentStatus(tenantId, documentId, "ready");
+        awaitQueueEmpty();
+        assertThat(jobs(tenantId, documentId)).extracting(job -> job.get("status")).containsExactly("failed", "succeeded");
+        assertThat(document(tenantId, documentId).get("error")).isNull();
+    }
+
+    @Test
+    void documentAlreadyReady_isSkipped_andTheMessageIsDeleted() {
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "ready");
+
+        send(documentId, tenantId);   // SQS delivers at least once, so a repeat must do nothing
+
+        awaitQueueEmpty();
+        verify(pipeline, never()).process(any(), any());
+        assertThat(jobs(tenantId, documentId)).isEmpty();
+    }
+
+    @Test
+    void unreadableMessage_movesToTheDlq_withoutStoppingTheListener() {
+        String marker = UUID.randomUUID().toString();
+        doNothing().when(pipeline).process(any(), any());
+
+        send("not json " + marker);
+        awaitMessageInDlq(marker);
+
+        // the listener thread survived: a normal message after it still goes through
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+        send(documentId, tenantId);
+        awaitDocumentStatus(tenantId, documentId, "ready");
+    }
+
+    private UUID newTenant() {
+        // tenants has no row-level security
+        return jdbc.sql("insert into tenants (name, language_profile) values (:name, 'en') returning id")
+                .param("name", "t-" + UUID.randomUUID())
+                .query(UUID.class)
+                .single();
+    }
+
+    private UUID newDocument(UUID tenantId, String status) {
+        return tenantTransactions.run(tenantId, () -> jdbc.sql("""
+                        insert into documents (tenant_id, file_name, content_type, size_bytes, checksum, s3_key, status)
+                        values (:tenantId, 'a.md', 'text/markdown', 10, decode(md5(random()::text), 'hex'), 'k', :status)
+                        returning id
+                        """)
+                .param("tenantId", tenantId)
+                .param("status", status)
+                .query(UUID.class)
+                .single());
+    }
+
+    private void send(UUID documentId, UUID tenantId) {
+        send("{\"documentId\":\"" + documentId + "\",\"tenantId\":\"" + tenantId + "\"}");
+    }
+
+    private void send(String body) {
+        sqs.sendMessage(r -> r.queueUrl(queueUrl("ingestion")).messageBody(body));
+    }
+
+    private String queueUrl(String name) {
+        return sqs.getQueueUrl(r -> r.queueName(name)).queueUrl();
+    }
+
+    private String awaitMessageInDlq(UUID documentId) {
+        return awaitMessageInDlq(documentId.toString());
+    }
+
+    private String awaitMessageInDlq(String text) {
+        List<Message> seen = new ArrayList<>();
+        await().atMost(TIMEOUT).until(() -> {
+            seen.addAll(sqs.receiveMessage(r -> r.queueUrl(queueUrl("ingestion-dlq"))
+                    .maxNumberOfMessages(10)
+                    .waitTimeSeconds(1)).messages());
+            return seen.stream().anyMatch(m -> m.body().contains(text));
+        });
+        return seen.stream().map(Message::body).filter(body -> body.contains(text)).findFirst().orElseThrow();
+    }
+
+    private void awaitDocumentStatus(UUID tenantId, UUID documentId, String status) {
+        await().atMost(TIMEOUT).until(() -> status.equals(document(tenantId, documentId).get("status")));
+    }
+
+    // Both counts: "not visible" covers a message the listener has received but not deleted yet.
+    private void awaitQueueEmpty() {
+        await().atMost(TIMEOUT).until(() -> {
+            Map<QueueAttributeName, String> counts = sqs.getQueueAttributes(r -> r.queueUrl(queueUrl("ingestion"))
+                    .attributeNames(QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES,
+                            QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES_NOT_VISIBLE)).attributes();
+            return counts.values().stream().allMatch("0"::equals);
+        });
+    }
+
+    private Map<String, Object> document(UUID tenantId, UUID documentId) {
+        return tenantTransactions.run(tenantId, () -> jdbc.sql("select status, error from documents where id = :id")
+                .param("id", documentId)
+                .query()
+                .singleRow());
+    }
+
+    private List<Map<String, Object>> jobs(UUID tenantId, UUID documentId) {
+        return tenantTransactions.run(tenantId, () -> jdbc.sql("""
+                        select attempt, status, error, finished_at from ingestion_jobs
+                        where document_id = :documentId order by attempt
+                        """)
+                .param("documentId", documentId)
+                .query()
+                .listOfRows());
+    }
+}
