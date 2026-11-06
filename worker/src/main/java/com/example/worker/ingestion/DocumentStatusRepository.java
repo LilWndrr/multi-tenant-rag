@@ -23,6 +23,13 @@ public class DocumentStatusRepository {
                 .optional();
     }
 
+    public Optional<DocumentSource> findSource(UUID documentId) {
+        return jdbc.sql("select s3_key, content_type from documents where id = :id")
+                .param("id", documentId)
+                .query((rs, n) -> new DocumentSource(rs.getString("s3_key"), rs.getString("content_type")))
+                .optional();
+    }
+
     public void markProcessing(UUID documentId) { setStatus(documentId, DocumentProcessStatus.processing, null); }
     public void markReady(UUID documentId)      { setStatus(documentId, DocumentProcessStatus.ready, null); }
     public void markFailed(UUID documentId, String error) { setStatus(documentId, DocumentProcessStatus.failed, error); }
