@@ -1,5 +1,5 @@
 # Everything language-specific lives here; Java code only sees the profile id ("tr").
-embedding-model: nvidia/nemotron-3.5-embed-1b:free
+embedding-model: nvidia/nemotron-3-embed-1b:free
 reranker: null            # no reranker until the retrieval phase
 chunk:
   size: 400               # tokens, sized with jtokkit

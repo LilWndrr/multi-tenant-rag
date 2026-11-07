@@ -1,10 +1,13 @@
 package com.example.worker.ingestion;
 
+import com.example.common.profile.LanguageProfile;
 import com.example.common.tenant.TenantTransactions;
+import com.example.worker.chunking.ChunkRepository;
 import com.example.worker.chunking.Chunker;
 import com.example.worker.chunking.TextChunk;
 import com.example.worker.document.DocumentParser;
 import com.example.worker.document.ParsedDocument;
+import com.example.worker.embedding.ChunkEmbedder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,7 +21,7 @@ import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.UUID;
 
-// Downloads, parses and chunks, so a corrupt or scanned file fails with a real error. Saving chunks and embedding come in Task 16.
+// Downloads, parses, chunks and embeds, then replaces the document's chunks and vectors in one transaction.
 @Component
 public class ParsingIngestionPipeline implements IngestionPipeline {
 
@@ -31,10 +34,12 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
     private final String bucketName;
     private final TenantProfileRepository tenantProfileRepository;
     private final Chunker chunker;
+    private final ChunkEmbedder chunkEmbedder;
+    private final ChunkRepository chunkRepository;
 
     public ParsingIngestionPipeline(S3Client s3Client, DocumentParser documentParser, DocumentStatusRepository documents,
                                     TenantTransactions tenantTransactions, @Value("${rag.aws.s3.bucket}") String bucketName,
-                                    TenantProfileRepository tenantProfileRepository, Chunker chunker) {
+                                    TenantProfileRepository tenantProfileRepository, Chunker chunker, ChunkEmbedder chunkEmbedder, ChunkRepository chunkRepository) {
         this.s3Client = s3Client;
         this.documentParser = documentParser;
         this.documents = documents;
@@ -42,6 +47,8 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
         this.bucketName = bucketName;
         this.tenantProfileRepository = tenantProfileRepository;
         this.chunker = chunker;
+        this.chunkEmbedder = chunkEmbedder;
+        this.chunkRepository = chunkRepository;
     }
 
     @Override
@@ -56,9 +63,18 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+        LanguageProfile profile = tenantProfileRepository.findFor(tenantId);
+        List<TextChunk> chunks = chunker.chunk(parsed, profile.chunk());
+        // outside any transaction: a database connection must not wait on HTTP calls
+        List<float[]> vectors = chunkEmbedder.embed(chunks, profile.embeddingModel(), tenantId);
 
-        List<TextChunk> chunks = chunker.chunk(parsed, tenantProfileRepository.findFor(tenantId).chunk());
-
+        tenantTransactions.run(tenantId, () -> {
+            chunkRepository.deleteByDocument(documentId);
+            for (int i = 0; i < chunks.size(); i++) {
+                chunkRepository.insertChunkAndVectorRow(tenantId, documentId, chunks.get(i),
+                        profile.textSearchConfig(), profile.embeddingModel(), vectors.get(i));
+            }
+        });
         // counts only: document text never goes in the logs
         log.info("document {}: {} sections, {} chunks", documentId, parsed.sections().size(), chunks.size());
     }

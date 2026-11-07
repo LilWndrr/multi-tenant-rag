@@ -1,6 +1,7 @@
 package com.example.worker;
 
 import com.example.common.tenant.TenantTransactions;
+import com.example.worker.ingestion.IngestionListener;
 import com.example.worker.ingestion.IngestionPipeline;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,10 +18,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -38,6 +42,8 @@ class IngestionListenerTest {
     @MockitoBean
     IngestionPipeline pipeline;
 
+    @Autowired
+    IngestionListener listener;
     @Autowired
     SqsClient sqs;
     @Autowired
@@ -123,6 +129,51 @@ class IngestionListenerTest {
         UUID tenantId = newTenant();
         UUID documentId = newDocument(tenantId, "queued");
         send(documentId, tenantId);
+        awaitDocumentStatus(tenantId, documentId, "ready");
+    }
+
+    // The test plays a second worker: it polls the queue past the timeout (3 s in tests) while the job is running.
+    @Test
+    void jobLongerThanTheVisibilityTimeout_isNotVisibleToAnotherWorker() throws InterruptedException {
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch finish = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            started.countDown();
+            finish.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            return null;
+        }).when(pipeline).process(any(), any());
+
+        send(documentId, tenantId);
+        assertThat(started.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+        try {
+            long pollUntil = System.nanoTime() + Duration.ofSeconds(7).toNanos();
+            while (System.nanoTime() < pollUntil) {
+                List<Message> visible = sqs.receiveMessage(r -> r.queueUrl(queueUrl("ingestion"))
+                        .maxNumberOfMessages(10)
+                        .waitTimeSeconds(1)).messages();
+                assertThat(visible).noneMatch(message -> message.body().contains(documentId.toString()));
+            }
+        } finally {
+            finish.countDown();
+        }
+
+        awaitDocumentStatus(tenantId, documentId, "ready");
+        awaitQueueEmpty();
+        assertThat(jobs(tenantId, documentId)).extracting(job -> job.get("attempt")).containsExactly(1);
+    }
+
+    @Test
+    void listenerStoppedAndStartedAgain_stillProcessesMessages() {
+        listener.stop();
+        listener.start();
+
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+        send(documentId, tenantId);
+
         awaitDocumentStatus(tenantId, documentId, "ready");
     }
 
