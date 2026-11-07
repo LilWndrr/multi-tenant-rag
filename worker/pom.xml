@@ -26,6 +26,18 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parser-pdf-module</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parser-microsoft-module</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.tika</groupId>
+            <artifactId>tika-parser-html-module</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
