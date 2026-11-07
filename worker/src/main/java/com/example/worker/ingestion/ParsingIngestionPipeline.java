@@ -1,6 +1,8 @@
 package com.example.worker.ingestion;
 
 import com.example.common.tenant.TenantTransactions;
+import com.example.worker.chunking.Chunker;
+import com.example.worker.chunking.TextChunk;
 import com.example.worker.document.DocumentParser;
 import com.example.worker.document.ParsedDocument;
 import org.slf4j.Logger;
@@ -13,9 +15,10 @@ import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.List;
 import java.util.UUID;
 
-// Downloads and parses, so a corrupt or scanned file fails with a real error. Chunking and embedding come in Tasks 15-16.
+// Downloads, parses and chunks, so a corrupt or scanned file fails with a real error. Saving chunks and embedding come in Task 16.
 @Component
 public class ParsingIngestionPipeline implements IngestionPipeline {
 
@@ -26,14 +29,19 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
     private final DocumentStatusRepository documents;
     private final TenantTransactions tenantTransactions;
     private final String bucketName;
+    private final TenantProfileRepository tenantProfileRepository;
+    private final Chunker chunker;
 
     public ParsingIngestionPipeline(S3Client s3Client, DocumentParser documentParser, DocumentStatusRepository documents,
-                                    TenantTransactions tenantTransactions, @Value("${rag.aws.s3.bucket}") String bucketName) {
+                                    TenantTransactions tenantTransactions, @Value("${rag.aws.s3.bucket}") String bucketName,
+                                    TenantProfileRepository tenantProfileRepository, Chunker chunker) {
         this.s3Client = s3Client;
         this.documentParser = documentParser;
         this.documents = documents;
         this.tenantTransactions = tenantTransactions;
         this.bucketName = bucketName;
+        this.tenantProfileRepository = tenantProfileRepository;
+        this.chunker = chunker;
     }
 
     @Override
@@ -49,7 +57,9 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
             throw new UncheckedIOException(e);
         }
 
+        List<TextChunk> chunks = chunker.chunk(parsed, tenantProfileRepository.findFor(tenantId).chunk());
+
         // counts only: document text never goes in the logs
-        log.info("parsed document {} into {} sections", documentId, parsed.sections().size());
+        log.info("document {}: {} sections, {} chunks", documentId, parsed.sections().size(), chunks.size());
     }
 }

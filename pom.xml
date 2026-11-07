@@ -28,6 +28,7 @@
         <resilience4j.version>2.4.0</resilience4j.version>
         <aws-java-sdk.version>2.57.8</aws-java-sdk.version>
         <tika.version>4.2.0</tika.version>
+        <jtokkit.version>1.1.0</jtokkit.version>
     </properties>
 
     <dependencyManagement>
@@ -70,6 +71,11 @@
                 <groupId>org.apache.tika</groupId>
                 <artifactId>tika-parser-html-module</artifactId>
                 <version>${tika.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.knuddels</groupId>
+                <artifactId>jtokkit</artifactId>
+                <version>${jtokkit.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.github.resilience4j</groupId>
