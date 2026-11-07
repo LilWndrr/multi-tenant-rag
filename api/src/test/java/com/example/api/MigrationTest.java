@@ -27,7 +27,7 @@ class MigrationTest {
     LanguageProfiles profiles;
 
     @Test
-    void latestAppliedVersionIsV3() {
+    void latestAppliedVersionIsV4() {
         String version = jdbc.sql("""
                         SELECT version FROM flyway_schema_history
                         WHERE success ORDER BY installed_rank DESC LIMIT 1
@@ -35,7 +35,7 @@ class MigrationTest {
                 .query(String.class)
                 .single();
 
-        assertThat(version).isEqualTo("3");
+        assertThat(version).isEqualTo("4");
     }
 
     @Test

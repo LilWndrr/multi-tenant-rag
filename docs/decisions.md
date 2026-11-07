@@ -71,3 +71,26 @@ Short notes on choices the plan asks us to record: what, why, and the evidence.
 - **`TenantProfileRepository` lives in the worker:** only the worker needs this lookup today. `common` holds what must be the same in both modules; this moves there if the API needs the same behaviour.
 - **Not yet:** the pipeline chunks and discards the result, and only logs counts. Chunks and vectors are saved together in Task 16, so a `ready` document still has no chunks.
 - **Evidence:** `HeadingAwareChunkerTest` re-counts every chunk with the real tokenizer and covers the limit, headings and ordinals across sections, whole sentences, overlap, long sentences, huge words, character safety, text that looks like a special token, and blank lines. `ParsingPipelineTest` runs the profile lookup and chunker through S3, the queue and the listener.
+
+## Task 16: embeddings through OpenRouter only, no local models (2026-11-07)
+
+- **What:** embeddings go through the gateway to OpenRouter, with the model taken from the tenant's language profile. This replaces the plan's second backend, `bge-m3` on a TEI container.
+- **Why:** one provider to run; the same setup locally and on AWS, where a local model would need extra compute; and no model to host. If free models fail too often, the fallback is a paid model on OpenRouter, which is a profile change, an index migration and a re-embed.
+- **Cost of this choice:** ingestion depends on OpenRouter and the model behind it, and document text goes to a third party. Check the chosen model's data policy before using anything beyond open corpora.
+- **Reranker:** Task 23 also moves off TEI. It needs a hosted reranker, on OpenRouter if a suitable one is available; not checked yet.
+- **Left in place:** the `bge-m3` index from `V2` stays, because migrations that have already run shouldn't be edited. It's unused and can be dropped by a later migration.
+- **Model:** `nvidia/nemotron-3-embed-1b:free`, measured at 2048 dimensions. Nemotron 3.5 Embed 1B was the first choice, but OpenRouter showed about 1% daily uptime for it on 2026-11-07, against 100% for this one. The listing says 3.5 shares its text embedding space with this model; compare real vectors before relying on that to skip a re-embed.
+- **`halfvec` index:** pgvector refuses an HNSW index on `vector` above 2000 dimensions, so `V4` casts to `halfvec(2048)`. The column doesn't change. Queries must use the same cast and model filter, or Postgres won't use the index. Models of 2000 dimensions or fewer use a plain `vector` index.
+- **Embedded text:** heading path plus content, so a chunk like "Run the start command" still matches searches about its section. Stored `content` and full-text search use the content alone.
+- **Saving:** embed first with no transaction open, so a connection never waits on HTTP. Then one transaction deletes the document's chunks and inserts the new chunks and vectors, so a failed embedding saves nothing and a retry leaves no duplicates.
+- **Heartbeat (closes the gap from Task 13):** the listener sets the visibility timeout at receive and extends it every 60 s while a job runs, so a job over 300 s doesn't reach a second worker. It stops before the delete or the retry delay, so an extension can't overwrite that delay. `init.sh` still sets 300 s on the queue, which only applies to other consumers.
+- **Removed:** `rag.models.embedding` from both main property files, since ingestion reads the model from the profile. `ModelGatewayLiveTest` keeps its own copy in the test properties.
+- **Known limits:**
+  - The gateway's retries last about 7 seconds, so a longer outage uses up the document's 3 attempts and it ends `failed`.
+  - A crash during the last attempt still leaves a document in `processing`.
+  - We do not check chunk length against the model; chunks of about 400 tokens are far below its listed 32,768 context length.
+  - The batch size of 32 is our choice, as OpenRouter lists no limit for this model.
+- **Evidence:**
+  - Real provider on 2026-11-07, through S3, the queue, the listener and the database: a generated 100-page PDF reached `ready` in 10 s with 200 chunks and 200 vectors in 7 batches, all logged `ok` in `model_calls`, about 700 ms per batch. A Markdown document on the second profile reached `ready` with that profile's search config. This used generated text, on a free endpoint that may not always be this fast; real documents still need trying (Task 19).
+  - `IngestionListenerTest` plays a second worker polling past the timeout; with the heartbeat effectively off, that test fails.
+  - `ChunkRepositoryTest`, `ChunkEmbedderTest` and `ParsingPipelineTest` cover row-level security, wrong vector sizes, batching, order, replacing chunks, embedding failures and 100 pages. CI uses a fake provider and never calls OpenRouter.
