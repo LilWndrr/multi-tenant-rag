@@ -37,19 +37,25 @@ public class IngestionProcessor {
             return;
         }
 
-        long jobId = tenantTransactions.run(tenantId, () -> {
+        // the version (s3Key) is read on every attempt, so a retry after a PUT works on the new file
+        record Started(long jobId, DocumentSource source) {}
+        Started started = tenantTransactions.run(tenantId, () -> {
+            DocumentSource current = documentStatusRepository.findSource(documentId).orElseThrow();
             documentStatusRepository.markProcessing(documentId);
-            return ingestionRepository.start(tenantId, documentId, attempt);
+            return new Started(ingestionRepository.start(tenantId, documentId, attempt), current);
         });
+        long jobId = started.jobId();
+        String version = started.source().s3Key();
 
+        boolean saved;
         try {
-            ingestionPipeline.process(documentId, tenantId);
+            saved = ingestionPipeline.process(documentId, tenantId, started.source());
         } catch (Exception e) {
             String error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             tenantTransactions.run(tenantId, () -> {
                 ingestionRepository.fail(jobId, error);
                 if (attempt >= maxAttempts) {
-                    documentStatusRepository.markFailed(documentId, error);
+                    documentStatusRepository.markFailed(documentId, version, error);
                 }
             });
             throw e;
@@ -57,7 +63,10 @@ public class IngestionProcessor {
 
         tenantTransactions.run(tenantId, () -> {
             ingestionRepository.succeed(jobId);
-            documentStatusRepository.markReady(documentId);
+            if (saved) {
+                documentStatusRepository.markReady(documentId, version);
+            }
+            // not saved: a newer version replaced this one, and its own message sets the status
         });
     }
 }

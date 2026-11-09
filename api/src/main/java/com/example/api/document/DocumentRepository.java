@@ -49,4 +49,51 @@ public class DocumentRepository {
                 .param("error", error)
                 .update();
     }
+
+    //
+    public boolean requeueIfFailed(UUID id) {
+        return jdbcClient.sql("""
+                        update documents set status = 'queued', error = null, updated_at = now()
+                        where id = :id and status = 'failed'
+                        """)
+                .param("id", id)
+                .update() == 1;
+    }
+
+    public Optional<StoredDocument> findById(UUID id) {
+        return jdbcClient.sql("select checksum, status, s3_key from documents where id = :id")
+                .param("id", id)
+                .query((rs, n) -> new StoredDocument(
+                        rs.getBytes("checksum"),
+                        DocumentProcessStatus.valueOf(rs.getString("status")),
+                        rs.getString("s3_key")))
+                .optional();
+    }
+
+
+    // Chunks, their vectors and the ingestion jobs go with it (on delete cascade). Returns the file's key, empty if not found.
+    public Optional<String> delete(UUID id) {
+        return jdbcClient.sql("delete from documents where id = :id returning s3_key")
+                .param("id", id)
+                .query(String.class)
+                .optional();
+    }
+
+    public boolean replaceFile(UUID id, String oldS3Key, byte[] checksum, long sizeBytes, String contentType,
+                               String fileName, String newS3Key) {
+        return jdbcClient.sql("""
+                        update documents
+                        set checksum = :checksum, size_bytes = :sizeBytes, content_type = :contentType,
+                            file_name = :fileName, s3_key = :newS3Key, status = 'queued', error = null, updated_at = now()
+                        where id = :id and s3_key = :oldS3Key
+                        """)
+                .param("id", id)
+                .param("oldS3Key", oldS3Key)
+                .param("checksum", checksum)
+                .param("sizeBytes", sizeBytes)
+                .param("contentType", contentType)
+                .param("fileName", fileName)
+                .param("newS3Key", newS3Key)
+                .update() == 1;
+    }
 }
