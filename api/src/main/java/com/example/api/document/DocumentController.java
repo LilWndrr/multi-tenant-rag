@@ -25,6 +25,17 @@ public class DocumentController {
         return toResponse(documentService.saveDocument(file));
     }
 
+    @GetMapping
+    public DocumentPage list(@RequestParam(defaultValue = "" + DocumentService.DEFAULT_PAGE_SIZE) int limit,
+                             @RequestParam(required = false) String cursor) {
+        return documentService.listDocuments(limit, cursor);
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<DocumentDetails> get(@PathVariable UUID id) {
+        return ResponseEntity.of(documentService.getDocument(id));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         return documentService.deleteDocument(id)

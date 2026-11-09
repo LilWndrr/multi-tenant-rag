@@ -1,10 +1,12 @@
 package com.example.worker.ingestion;
 
+import com.example.common.enums.DocumentErrorCode;
 import com.example.common.profile.LanguageProfile;
 import com.example.common.tenant.TenantTransactions;
 import com.example.worker.chunking.ChunkRepository;
 import com.example.worker.chunking.Chunker;
 import com.example.worker.chunking.TextChunk;
+import com.example.worker.document.DocumentParseException;
 import com.example.worker.document.DocumentParser;
 import com.example.worker.document.ParsedDocument;
 import com.example.worker.embedding.ChunkEmbedder;
@@ -13,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
@@ -57,13 +60,20 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
         try (ResponseInputStream<GetObjectResponse> content =
                      s3Client.getObject(request -> request.bucket(bucketName).key(source.s3Key()))) {
             parsed = documentParser.parse(content, source.contentType());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        } catch (DocumentParseException e) {
+            throw new IngestionException(DocumentErrorCode.parse_failed, e);
+        } catch (SdkException | IOException | UncheckedIOException e) {
+            throw new IngestionException(DocumentErrorCode.file_unavailable, e);
         }
         LanguageProfile profile = tenantProfileRepository.findFor(tenantId);
         List<TextChunk> chunks = chunker.chunk(parsed, profile.chunk());
         // outside any transaction: a database connection must not wait on HTTP calls
-        List<float[]> vectors = chunkEmbedder.embed(chunks, profile.embeddingModel(), tenantId);
+        List<float[]> vectors;
+        try {
+            vectors = chunkEmbedder.embed(chunks, profile.embeddingModel(), tenantId);
+        } catch (RuntimeException e) {
+            throw new IngestionException(DocumentErrorCode.embedding_failed, e);
+        }
 
         boolean saved = tenantTransactions.run(tenantId, () -> {
             // locks the row, so a PUT can't switch the version while the chunks are replaced

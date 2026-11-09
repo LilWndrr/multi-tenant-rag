@@ -68,6 +68,7 @@ class ParsingPipelineTest {
 
         assertThat(ingested.document().get("status")).isEqualTo("ready");
         assertThat(ingested.document().get("error")).isNull();
+        assertThat(ingested.document().get("error_code")).isNull();
         assertThat(chunkCount(ingested)).isPositive();
         assertThat(vectorCount(ingested)).isEqualTo(chunkCount(ingested));
         assertThat(storedValues(ingested, "e.model")).containsOnly(profiles.get("en").embeddingModel());
@@ -126,6 +127,7 @@ class ParsingPipelineTest {
 
         assertThat(ingested.document().get("status")).isEqualTo("failed");
         assertThat(ingested.document().get("error")).isEqualTo("provider unavailable");
+        assertThat(ingested.document().get("error_code")).isEqualTo("embedding_failed");
         assertThat(chunkCount(ingested)).isZero();
         assertThat(gateway.embedCalls()).isEqualTo(3);   // one per attempt
     }
@@ -149,6 +151,7 @@ class ParsingPipelineTest {
 
         assertThat(ingested.document().get("status")).isEqualTo("failed");
         assertThat((String) ingested.document().get("error")).contains("could not parse application/pdf");
+        assertThat(ingested.document().get("error_code")).isEqualTo("parse_failed");
         assertThat(gateway.embedCalls()).isZero();
     }
 
@@ -158,6 +161,7 @@ class ParsingPipelineTest {
 
         assertThat(ingested.document().get("status")).isEqualTo("failed");
         assertThat((String) ingested.document().get("error")).isNotBlank();
+        assertThat(ingested.document().get("error_code")).isEqualTo("file_unavailable");
     }
 
     private byte[] sample(String name) throws IOException {
@@ -224,7 +228,7 @@ class ParsingPipelineTest {
     }
 
     private Map<String, Object> document(UUID tenantId, UUID documentId) {
-        return tenantTransactions.run(tenantId, () -> jdbc.sql("select status, error from documents where id = :id")
+        return tenantTransactions.run(tenantId, () -> jdbc.sql("select status, error, error_code from documents where id = :id")
                 .param("id", documentId)
                 .query()
                 .singleRow());

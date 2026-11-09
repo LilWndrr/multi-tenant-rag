@@ -2,6 +2,7 @@ package com.example.worker.ingestion;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import com.example.common.enums.DocumentErrorCode;
 import com.example.common.enums.DocumentProcessStatus;
 
 import java.util.Optional;
@@ -41,23 +42,30 @@ public class DocumentStatusRepository {
     }
 
     public void markProcessing(UUID documentId) {
-        jdbc.sql("update documents set status = 'processing', error = null, updated_at = now() where id = :id")
+        jdbc.sql("update documents set status = 'processing', error = null, error_code = null, updated_at = now() where id = :id")
                 .param("id", documentId)
                 .update();
     }
 
     // Both only change the version this job processed: an outdated job must not set the status of a newer one.
-    public void markReady(UUID documentId, String s3Key)               { setFinalStatus(documentId, s3Key, DocumentProcessStatus.ready, null); }
-    public void markFailed(UUID documentId, String s3Key, String error) { setFinalStatus(documentId, s3Key, DocumentProcessStatus.failed, error); }
+    // code is what clients see; error is the raw message, kept for debugging only
+    public void markReady(UUID documentId, String s3Key) {
+        setFinalStatus(documentId, s3Key, DocumentProcessStatus.ready, null, null);
+    }
 
-    private void setFinalStatus(UUID documentId, String s3Key, DocumentProcessStatus status, String error) {
+    public void markFailed(UUID documentId, String s3Key, DocumentErrorCode code, String error) {
+        setFinalStatus(documentId, s3Key, DocumentProcessStatus.failed, code, error);
+    }
+
+    private void setFinalStatus(UUID documentId, String s3Key, DocumentProcessStatus status, DocumentErrorCode code, String error) {
         jdbc.sql("""
-                        update documents set status = :status, error = :error, updated_at = now()
+                        update documents set status = :status, error_code = :code, error = :error, updated_at = now()
                         where id = :id and s3_key = :s3Key
                         """)
                 .param("id", documentId)
                 .param("s3Key", s3Key)
                 .param("status", status.name())
+                .param("code", code != null ? code.name() : null)
                 .param("error", error)
                 .update();
     }

@@ -1,6 +1,7 @@
 package com.example.api.document;
 
 import com.example.api.tenant.TenantContext;
+import com.example.common.enums.DocumentErrorCode;
 import com.example.common.enums.DocumentProcessStatus;
 import com.example.common.ingestion.IngestionMessage;
 import com.example.common.tenant.TenantTransactions;
@@ -106,7 +107,8 @@ public class DocumentService {
             ingestionQueue.publish(new IngestionMessage(documentId, tenantId));
         } catch (SdkException e) {
             // see docs/decisions.md: no outbox, so a failed send fails the document and the client is told to retry
-            tenantTransactions.run(tenantId, () -> documentRepository.markFailed(documentId, "could not queue for ingestion"));
+            tenantTransactions.run(tenantId, () -> documentRepository.markFailed(documentId,
+                    DocumentErrorCode.queue_unavailable, "could not queue for ingestion"));
             throw new ResponseStatusException(SERVICE_UNAVAILABLE, "could not queue the document, try again", e);
         }
         return new DocumentUploadResult(new DocumentSaveResponse(documentId, DocumentProcessStatus.queued), true);
@@ -187,6 +189,31 @@ public class DocumentService {
             throw new ResponseStatusException(UNSUPPORTED_MEDIA_TYPE, "unsupported file type: " + contentType);
         }
         return new Upload(bytes, fileName, contentType, sha256(bytes));
+    }
+
+    static final int DEFAULT_PAGE_SIZE = 20;
+    static final int MAX_PAGE_SIZE = 100;
+
+    public Optional<DocumentDetails> getDocument(UUID documentId) {
+        UUID tenantId = tenantContext.getTenantId();
+        return tenantTransactions.run(tenantId, () -> documentRepository.findDetails(documentId));
+    }
+
+    // One row more than asked tells whether there's a next page; the cursor points at the last row returned.
+    public DocumentPage listDocuments(int limit, String cursor) {
+        if (limit < 1 || limit > MAX_PAGE_SIZE) {
+            throw new ResponseStatusException(BAD_REQUEST, "limit must be between 1 and " + MAX_PAGE_SIZE);
+        }
+        DocumentCursor after = cursor != null ? DocumentCursor.decode(cursor) : null;
+        UUID tenantId = tenantContext.getTenantId();
+        List<DocumentDetails> rows = tenantTransactions.run(tenantId, () -> documentRepository.findPage(after, limit + 1));
+
+        if (rows.size() <= limit) {
+            return new DocumentPage(rows, null);
+        }
+        List<DocumentDetails> items = rows.subList(0, limit);
+        DocumentDetails last = items.getLast();
+        return new DocumentPage(List.copyOf(items), new DocumentCursor(last.createdAt(), last.id()).encode());
     }
 
     // The row first: a leftover S3 object is harmless, a row pointing at a missing file is not.
