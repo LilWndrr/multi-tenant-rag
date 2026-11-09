@@ -2,7 +2,13 @@ package com.example.api.document;
 
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import com.example.common.enums.DocumentErrorCode;
 import com.example.common.enums.DocumentProcessStatus;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -43,9 +49,13 @@ public class DocumentRepository {
                 .optional();
     }
 
-    public void markFailed(UUID id, String error) {
-        jdbcClient.sql("update documents set status = 'failed', error = :error, updated_at = now() where id = :id")
+    public void markFailed(UUID id, DocumentErrorCode code, String error) {
+        jdbcClient.sql("""
+                        update documents set status = 'failed', error_code = :code, error = :error, updated_at = now()
+                        where id = :id
+                        """)
                 .param("id", id)
+                .param("code", code.name())
                 .param("error", error)
                 .update();
     }
@@ -53,7 +63,7 @@ public class DocumentRepository {
     //
     public boolean requeueIfFailed(UUID id) {
         return jdbcClient.sql("""
-                        update documents set status = 'queued', error = null, updated_at = now()
+                        update documents set status = 'queued', error = null, error_code = null, updated_at = now()
                         where id = :id and status = 'failed'
                         """)
                 .param("id", id)
@@ -71,6 +81,51 @@ public class DocumentRepository {
     }
 
 
+    private static final String DETAILS_COLUMNS =
+            "id, file_name, content_type, size_bytes, status, error_code, created_at, updated_at";
+
+    public Optional<DocumentDetails> findDetails(UUID id) {
+        return jdbcClient.sql("select " + DETAILS_COLUMNS + " from documents where id = :id")
+                .param("id", id)
+                .query(DocumentRepository::details)
+                .optional();
+    }
+
+    // Newest first. after is null on the first page; otherwise the rows after that position in the same order.
+    // The row comparison matches the sort and the V5 index (tenant_id, created_at desc, id desc).
+    public List<DocumentDetails> findPage(DocumentCursor after, int limit) {
+        if (after == null) {
+            return jdbcClient.sql("select " + DETAILS_COLUMNS + " from documents order by created_at desc, id desc limit :limit")
+                    .param("limit", limit)
+                    .query(DocumentRepository::details)
+                    .list();
+        }
+        return jdbcClient.sql("""
+                        select %s from documents
+                        where (created_at, id) < (:createdAt, :id)
+                        order by created_at desc, id desc
+                        limit :limit
+                        """.formatted(DETAILS_COLUMNS))
+                .param("createdAt", after.createdAt().atOffset(ZoneOffset.UTC))   // the driver takes OffsetDateTime, not Instant
+                .param("id", after.id())
+                .param("limit", limit)
+                .query(DocumentRepository::details)
+                .list();
+    }
+
+    private static DocumentDetails details(ResultSet rs, int rowNum) throws SQLException {
+        String code = rs.getString("error_code");
+        return new DocumentDetails(
+                rs.getObject("id", UUID.class),
+                rs.getString("file_name"),
+                rs.getString("content_type"),
+                rs.getLong("size_bytes"),
+                DocumentProcessStatus.valueOf(rs.getString("status")),
+                code != null ? DocumentErrorCode.valueOf(code) : null,
+                rs.getObject("created_at", OffsetDateTime.class).toInstant(),
+                rs.getObject("updated_at", OffsetDateTime.class).toInstant());
+    }
+
     // Chunks, their vectors and the ingestion jobs go with it (on delete cascade). Returns the file's key, empty if not found.
     public Optional<String> delete(UUID id) {
         return jdbcClient.sql("delete from documents where id = :id returning s3_key")
@@ -84,7 +139,8 @@ public class DocumentRepository {
         return jdbcClient.sql("""
                         update documents
                         set checksum = :checksum, size_bytes = :sizeBytes, content_type = :contentType,
-                            file_name = :fileName, s3_key = :newS3Key, status = 'queued', error = null, updated_at = now()
+                            file_name = :fileName, s3_key = :newS3Key, status = 'queued', error = null, error_code = null,
+                            updated_at = now()
                         where id = :id and s3_key = :oldS3Key
                         """)
                 .param("id", id)

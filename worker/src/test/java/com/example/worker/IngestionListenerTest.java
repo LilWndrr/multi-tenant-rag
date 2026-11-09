@@ -79,6 +79,8 @@ class IngestionListenerTest {
         assertThat(jobs(tenantId, documentId)).extracting(job -> job.get("attempt")).containsExactly(1, 2, 3);
         assertThat(document(tenantId, documentId).get("status")).isEqualTo("failed");
         assertThat(document(tenantId, documentId).get("error")).isEqualTo("parse failed");
+        // an untagged exception: the pipeline only tags download, parse and embedding failures
+        assertThat(document(tenantId, documentId).get("error_code")).isEqualTo("internal_error");
     }
 
     @Test
@@ -293,7 +295,7 @@ class IngestionListenerTest {
     }
 
     private Map<String, Object> document(UUID tenantId, UUID documentId) {
-        return tenantTransactions.run(tenantId, () -> jdbc.sql("select status, error from documents where id = :id")
+        return tenantTransactions.run(tenantId, () -> jdbc.sql("select status, error, error_code from documents where id = :id")
                 .param("id", documentId)
                 .query()
                 .singleRow());

@@ -1,5 +1,6 @@
 package com.example.worker.ingestion;
 
+import com.example.common.enums.DocumentErrorCode;
 import com.example.common.enums.DocumentProcessStatus;
 import com.example.common.ingestion.IngestionMessage;
 import com.example.common.tenant.TenantTransactions;
@@ -52,10 +53,11 @@ public class IngestionProcessor {
             saved = ingestionPipeline.process(documentId, tenantId, started.source());
         } catch (Exception e) {
             String error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            DocumentErrorCode code = e instanceof IngestionException tagged ? tagged.code() : DocumentErrorCode.internal_error;
             tenantTransactions.run(tenantId, () -> {
                 ingestionRepository.fail(jobId, error);
                 if (attempt >= maxAttempts) {
-                    documentStatusRepository.markFailed(documentId, version, error);
+                    documentStatusRepository.markFailed(documentId, version, code, error);
                 }
             });
             throw e;

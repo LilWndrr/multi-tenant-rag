@@ -97,8 +97,14 @@ public class DocumentTest {
 
 
         String queueUrl = sqsClient.getQueueUrl(r -> r.queueName("ingestion")).queueUrl();
-        var messages = sqsClient.receiveMessage(r -> r.queueUrl(queueUrl).maxNumberOfMessages(10).waitTimeSeconds(2)).messages();
-        assertThat(messages).anySatisfy(m -> assertThat(m.body()).contains(id.toString()));
+        // nothing consumes the queue in API tests, so other tests' messages are there too: read until ours shows up
+        // (received messages stay hidden for the visibility timeout, so each read gets new ones)
+        boolean found = false;
+        for (int read = 0; read < 50 && !found; read++) {
+            var messages = sqsClient.receiveMessage(r -> r.queueUrl(queueUrl).maxNumberOfMessages(10).waitTimeSeconds(1)).messages();
+            found = messages.stream().anyMatch(m -> m.body().contains(id.toString()));
+        }
+        assertThat(found).as("ingestion message for " + id).isTrue();
 
         String status = tenantTransactions.run(tenant.id(), () ->
                 jdbc.sql("select status from documents where id = :id").param("id", id).query(String.class).single());
