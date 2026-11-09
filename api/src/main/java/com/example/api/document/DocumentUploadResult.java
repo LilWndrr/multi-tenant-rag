@@ -1,5 +1,6 @@
 package com.example.api.document;
 
-// created = false: the tenant already had a file with this checksum, and document is that one (200, not 202).
-public record DocumentUploadResult(DocumentSaveResponse document, boolean created) {
+// queued = true: this request started processing, either a new file or a failed one sent again (202).
+// queued = false: the tenant already had this file and it's queued, processing or ready; document is that one (200).
+public record DocumentUploadResult(DocumentSaveResponse document, boolean queued) {
 }

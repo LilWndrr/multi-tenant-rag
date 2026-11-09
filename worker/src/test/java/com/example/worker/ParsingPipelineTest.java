@@ -2,6 +2,7 @@ package com.example.worker;
 
 import com.example.common.profile.LanguageProfiles;
 import com.example.common.tenant.TenantTransactions;
+import com.example.worker.ingestion.DocumentSource;
 import com.example.worker.ingestion.IngestionPipeline;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -23,6 +24,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -87,10 +89,33 @@ class ParsingPipelineTest {
         Ingested ingested = ingest(sample("sample.md"), "text/markdown", true, "en");
         int chunks = chunkCount(ingested);
 
-        pipeline.process(ingested.documentId(), ingested.tenantId());
+        assertThat(pipeline.process(ingested.documentId(), ingested.tenantId(), source(ingested))).isTrue();
 
         assertThat(chunkCount(ingested)).isEqualTo(chunks);
         assertThat(vectorCount(ingested)).isEqualTo(chunks);
+    }
+
+    // A job that started before a PUT finishes after it: its old content must not replace the new version's chunks.
+    @Test
+    void outdatedVersion_savesNothing_andLeavesTheChunksAsTheyAre() throws IOException {
+        Ingested ingested = ingest(sample("sample.md"), "text/markdown", true, "en");
+        DocumentSource oldVersion = source(ingested);
+        List<String> chunksBefore = storedValues(ingested, "c.content");
+
+        String newKey = ingested.tenantId() + "/" + ingested.documentId() + "/" + UUID.randomUUID();
+        s3.putObject(r -> r.bucket("rag-documents").key(newKey),
+                RequestBody.fromString("# Yeni\n\nTamamen farklı bir içerik.", StandardCharsets.UTF_8));
+        tenantTransactions.run(ingested.tenantId(), () -> jdbc.sql("update documents set s3_key = :key where id = :id")
+                .param("key", newKey)
+                .param("id", ingested.documentId())
+                .update());
+
+        assertThat(pipeline.process(ingested.documentId(), ingested.tenantId(), oldVersion)).isFalse();
+        assertThat(storedValues(ingested, "c.content")).containsExactlyInAnyOrderElementsOf(chunksBefore);
+
+        // the current version still goes through
+        assertThat(pipeline.process(ingested.documentId(), ingested.tenantId(), source(ingested))).isTrue();
+        assertThat(storedValues(ingested, "c.content")).singleElement().asString().contains("Tamamen farklı");
     }
 
     @Test
@@ -205,6 +230,13 @@ class ParsingPipelineTest {
                 .singleRow());
     }
 
+    private DocumentSource source(Ingested ingested) {
+        return tenantTransactions.run(ingested.tenantId(), () -> jdbc.sql("select s3_key, content_type from documents where id = :id")
+                .param("id", ingested.documentId())
+                .query((rs, n) -> new DocumentSource(rs.getString("s3_key"), rs.getString("content_type")))
+                .single());
+    }
+
     private int chunkCount(Ingested ingested) {
         return tenantTransactions.run(ingested.tenantId(), () -> jdbc.sql("select count(*) from chunks where document_id = :id")
                 .param("id", ingested.documentId())
@@ -223,7 +255,7 @@ class ParsingPipelineTest {
                 .single());
     }
 
-    private java.util.List<String> storedValues(Ingested ingested, String column) {
+    private List<String> storedValues(Ingested ingested, String column) {
         return tenantTransactions.run(ingested.tenantId(), () -> jdbc.sql("""
                         select %s::text from chunks c
                         join chunk_embeddings e on e.chunk_id = c.id

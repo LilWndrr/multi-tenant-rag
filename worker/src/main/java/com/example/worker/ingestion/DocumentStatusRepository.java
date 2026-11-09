@@ -30,13 +30,33 @@ public class DocumentStatusRepository {
                 .optional();
     }
 
-    public void markProcessing(UUID documentId) { setStatus(documentId, DocumentProcessStatus.processing, null); }
-    public void markReady(UUID documentId)      { setStatus(documentId, DocumentProcessStatus.ready, null); }
-    public void markFailed(UUID documentId, String error) { setStatus(documentId, DocumentProcessStatus.failed, error); }
-
-    private void setStatus(UUID documentId, DocumentProcessStatus status, String error) {
-        jdbc.sql("update documents set status = :status, error = :error, updated_at = now() where id = :id")
+    // true when the document still has this version (s3Key); the row stays locked until the transaction ends
+    public boolean lockIfCurrent(UUID documentId, String s3Key) {
+        return jdbc.sql("select 1 from documents where id = :id and s3_key = :s3Key for update")
                 .param("id", documentId)
+                .param("s3Key", s3Key)
+                .query(Integer.class)
+                .optional()
+                .isPresent();
+    }
+
+    public void markProcessing(UUID documentId) {
+        jdbc.sql("update documents set status = 'processing', error = null, updated_at = now() where id = :id")
+                .param("id", documentId)
+                .update();
+    }
+
+    // Both only change the version this job processed: an outdated job must not set the status of a newer one.
+    public void markReady(UUID documentId, String s3Key)               { setFinalStatus(documentId, s3Key, DocumentProcessStatus.ready, null); }
+    public void markFailed(UUID documentId, String s3Key, String error) { setFinalStatus(documentId, s3Key, DocumentProcessStatus.failed, error); }
+
+    private void setFinalStatus(UUID documentId, String s3Key, DocumentProcessStatus status, String error) {
+        jdbc.sql("""
+                        update documents set status = :status, error = :error, updated_at = now()
+                        where id = :id and s3_key = :s3Key
+                        """)
+                .param("id", documentId)
+                .param("s3Key", s3Key)
                 .param("status", status.name())
                 .param("error", error)
                 .update();

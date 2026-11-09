@@ -3,6 +3,7 @@ package com.example.worker;
 import com.example.common.tenant.TenantTransactions;
 import com.example.worker.ingestion.IngestionListener;
 import com.example.worker.ingestion.IngestionPipeline;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -25,7 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.doNothing;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -51,11 +53,17 @@ class IngestionListenerTest {
     @Autowired
     TenantTransactions tenantTransactions;
 
+    // a mock returns false by default, which would mean "replaced by a newer version" for every message
+    @BeforeEach
+    void pipelineSavesByDefault() {
+        when(pipeline.process(any(), any(), any())).thenReturn(true);
+    }
+
     @Test
     void alwaysFailingDocument_gets3Attempts_thenFailedWithTheError_andTheMessageMovesToTheDlq() {
         UUID tenantId = newTenant();
         UUID documentId = newDocument(tenantId, "queued");
-        doThrow(new RuntimeException("parse failed")).when(pipeline).process(any(), any());
+        doThrow(new RuntimeException("parse failed")).when(pipeline).process(any(), any(), any());
 
         send(documentId, tenantId);
 
@@ -82,7 +90,7 @@ class IngestionListenerTest {
 
         awaitDocumentStatus(tenantId, documentId, "ready");
         awaitQueueEmpty();
-        verify(pipeline).process(documentId, tenantId);
+        verify(pipeline).process(eq(documentId), eq(tenantId), any());
         assertThat(jobs(tenantId, documentId)).singleElement().satisfies(job -> {
             assertThat(job.get("status")).isEqualTo("succeeded");
             assertThat(job.get("attempt")).isEqualTo(1);
@@ -95,7 +103,7 @@ class IngestionListenerTest {
     void failureThenSuccess_keepsBothAttempts_andEndsReady() {
         UUID tenantId = newTenant();
         UUID documentId = newDocument(tenantId, "queued");
-        doThrow(new RuntimeException("temporary")).doNothing().when(pipeline).process(any(), any());
+        doThrow(new RuntimeException("temporary")).doReturn(true).when(pipeline).process(any(), any(), any());
 
         send(documentId, tenantId);
 
@@ -113,14 +121,13 @@ class IngestionListenerTest {
         send(documentId, tenantId);   // SQS delivers at least once, so a repeat must do nothing
 
         awaitQueueEmpty();
-        verify(pipeline, never()).process(any(), any());
+        verify(pipeline, never()).process(any(), any(), any());
         assertThat(jobs(tenantId, documentId)).isEmpty();
     }
 
     @Test
     void unreadableMessage_movesToTheDlq_withoutStoppingTheListener() {
         String marker = UUID.randomUUID().toString();
-        doNothing().when(pipeline).process(any(), any());
 
         send("not json " + marker);
         awaitMessageInDlq(marker);
@@ -142,8 +149,8 @@ class IngestionListenerTest {
         doAnswer(invocation -> {
             started.countDown();
             finish.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            return null;
-        }).when(pipeline).process(any(), any());
+            return true;
+        }).when(pipeline).process(any(), any(), any());
 
         send(documentId, tenantId);
         assertThat(started.await(TIMEOUT.toSeconds(), TimeUnit.SECONDS)).isTrue();
@@ -163,6 +170,53 @@ class IngestionListenerTest {
         awaitDocumentStatus(tenantId, documentId, "ready");
         awaitQueueEmpty();
         assertThat(jobs(tenantId, documentId)).extracting(job -> job.get("attempt")).containsExactly(1);
+    }
+
+    // A PUT during the job: the pipeline saved nothing, so the document is left for the newer message.
+    @Test
+    void jobReplacedByANewerVersion_succeeds_butDoesNotMarkTheDocumentReady() {
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+        doAnswer(invocation -> {
+            simulatePut(tenantId, documentId);
+            return false;
+        }).when(pipeline).process(any(), any(), any());
+
+        send(documentId, tenantId);
+
+        await().atMost(TIMEOUT).until(() -> !jobs(tenantId, documentId).isEmpty()
+                && "succeeded".equals(jobs(tenantId, documentId).getFirst().get("status")));
+        awaitQueueEmpty();
+        assertThat(document(tenantId, documentId).get("status")).isEqualTo("queued");
+    }
+
+    // The old file is deleted after a PUT, so an outdated job can keep failing; it must not fail the newer version.
+    @Test
+    void outdatedJobFailingEveryAttempt_doesNotMarkTheNewerVersionFailed() {
+        UUID tenantId = newTenant();
+        UUID documentId = newDocument(tenantId, "queued");
+        doAnswer(invocation -> {
+            simulatePut(tenantId, documentId);
+            throw new RuntimeException("old file is gone");
+        }).when(pipeline).process(any(), any(), any());
+
+        send(documentId, tenantId);
+
+        awaitMessageInDlq(documentId);
+        assertThat(jobs(tenantId, documentId)).hasSize(3)
+                .allSatisfy(job -> assertThat(job.get("status")).isEqualTo("failed"));
+        assertThat(document(tenantId, documentId).get("status")).isEqualTo("queued");
+        assertThat(document(tenantId, documentId).get("error")).isNull();
+    }
+
+    // what the API's PUT does to the row: a new key, back to queued
+    private void simulatePut(UUID tenantId, UUID documentId) {
+        tenantTransactions.run(tenantId, () -> jdbc.sql("""
+                        update documents set s3_key = :key, status = 'queued', error = null where id = :id
+                        """)
+                .param("key", tenantId + "/" + documentId + "/" + UUID.randomUUID())
+                .param("id", documentId)
+                .update());
     }
 
     @Test

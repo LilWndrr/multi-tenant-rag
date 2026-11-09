@@ -52,10 +52,7 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
     }
 
     @Override
-    public void process(UUID documentId, UUID tenantId) {
-        DocumentSource source = tenantTransactions.run(tenantId, () -> documents.findSource(documentId))
-                .orElseThrow(() -> new IllegalStateException("document not found: " + documentId));
-
+    public boolean process(UUID documentId, UUID tenantId, DocumentSource source) {
         ParsedDocument parsed;
         try (ResponseInputStream<GetObjectResponse> content =
                      s3Client.getObject(request -> request.bucket(bucketName).key(source.s3Key()))) {
@@ -68,14 +65,24 @@ public class ParsingIngestionPipeline implements IngestionPipeline {
         // outside any transaction: a database connection must not wait on HTTP calls
         List<float[]> vectors = chunkEmbedder.embed(chunks, profile.embeddingModel(), tenantId);
 
-        tenantTransactions.run(tenantId, () -> {
+        boolean saved = tenantTransactions.run(tenantId, () -> {
+            // locks the row, so a PUT can't switch the version while the chunks are replaced
+            if (!documents.lockIfCurrent(documentId, source.s3Key())) {
+                return false;
+            }
             chunkRepository.deleteByDocument(documentId);
             for (int i = 0; i < chunks.size(); i++) {
                 chunkRepository.insertChunkAndVectorRow(tenantId, documentId, chunks.get(i),
                         profile.textSearchConfig(), profile.embeddingModel(), vectors.get(i));
             }
+            return true;
         });
         // counts only: document text never goes in the logs
-        log.info("document {}: {} sections, {} chunks", documentId, parsed.sections().size(), chunks.size());
+        if (saved) {
+            log.info("document {}: {} sections, {} chunks", documentId, parsed.sections().size(), chunks.size());
+        } else {
+            log.info("document {}: replaced by a newer version during processing, nothing saved", documentId);
+        }
+        return saved;
     }
 }
