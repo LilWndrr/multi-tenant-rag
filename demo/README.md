@@ -7,6 +7,7 @@ all lands in `demo/data/`, which is gitignored.
 ```bash
 ./demo/seed.sh            # the demo tenants (needs the API and the worker running)
 ./demo/seed.sh --local    # also LaRA, for local evaluation only
+./demo/seed.sh --reset    # delete the tenants' documents first, after a LocalStack restart
 ```
 
 The seed reads `ADMIN_TOKEN` from the repo-root `.env`. Each run creates a temporary API key per tenant and revokes
@@ -15,11 +16,15 @@ skipped, so nothing is embedded twice. Set `RAG_API_URL` to seed another address
 
 Licences were checked on 2026-11-09.
 
-**Not fully seeded yet.** The first run on 2026-11-09 hit OpenRouter's daily free-model limit (about 50 requests a day
-without purchased credits) after 56 Kubernetes pages; the rest failed with `embedding_failed`. The worker embeds per
-document, so the demo needs roughly one call per document, about 550 in all. A one-time purchase of 10 OpenRouter
-credits raises the limit to 1,000 free requests a day. Until then, running the seed again requeues the failed documents
-and skips the ready ones.
+**OpenRouter limits.** The worker embeds per document, so seeding takes roughly one call per document: about 510 for
+the demo tenants, about 220 more for LaRA. Without purchased credits OpenRouter allows only about 50 free-model requests a
+day, which isn't enough; after a one-time purchase of 10 credits it's 1,000 a day. Free models stay capped at about 20
+requests a minute either way, so expect 429s in the worker log; the gateway's retries get past them. The demo seed took
+about 20 minutes on 2026-11-10.
+
+**After restarting LocalStack**, run `./demo/seed.sh --reset`. LocalStack keeps nothing across a restart, so S3 is empty
+while Postgres still has the rows, and a requeued document would fail with `file_unavailable`. `--reset` deletes the
+tenants' documents through the API and uploads them again.
 
 | Tenant | Profile | Corpus | Licence | Where it may go |
 |---|---|---|---|---|

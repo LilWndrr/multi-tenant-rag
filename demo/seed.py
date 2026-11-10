@@ -78,18 +78,44 @@ def all_documents(api, key):
             return documents
 
 
-def seed(api, admin, folder, corpus, timeout_seconds):
+SEED_KEY_PREFIX = "seed "
+
+
+def revoke_leftover_seed_keys(api, admin, tenant_id):
+    """Keys a run didn't get to revoke, because it was stopped or crashed."""
+    _, keys = api.call("GET", f"/admin/tenants/{tenant_id}/api-keys", admin)
+    leftovers = [k for k in keys or [] if k["name"].startswith(SEED_KEY_PREFIX) and not k["revokedAt"]]
+    for k in leftovers:
+        api.call("POST", f"/admin/tenants/{tenant_id}/api-keys/{k['id']}/revoke", admin)
+    if leftovers:
+        print(f"  revoked {len(leftovers)} leftover seed key(s)")
+
+
+def delete_all_documents(api, key):
+    documents = all_documents(api, key)
+    for d in documents:
+        status, body = api.call("DELETE", f"/v1/documents/{d['id']}", key)
+        if status not in (204, 404):
+            sys.exit(f"deleting document {d['id']} failed: {status} {body}")
+    print(f"  reset: deleted {len(documents)} documents")
+
+
+def seed(api, admin, folder, corpus, timeout_seconds, reset):
     files = sorted((DATA / folder / "files").glob("*.md"))
     if not files:
         print(f"{folder}: no files, run demo/prepare.py{' --local' if corpus['local'] else ''} first")
         return False
     tenant_id, created = find_or_create_tenant(api, admin, corpus["tenant"], corpus["profile"])
     print(f"{corpus['tenant']} ({corpus['profile']}): tenant {'created' if created else 'exists'}, {len(files)} files")
+    revoke_leftover_seed_keys(api, admin, tenant_id)
 
-    status, key = api.call("POST", f"/admin/tenants/{tenant_id}/api-keys", admin, {"name": "seed " + time.strftime("%Y-%m-%d %H:%M")})
+    status, key = api.call("POST", f"/admin/tenants/{tenant_id}/api-keys", admin,
+                           {"name": SEED_KEY_PREFIX + time.strftime("%Y-%m-%d %H:%M")})
     if status != 201:
         sys.exit(f"creating a seed key failed: {status} {key}")
     try:
+        if reset:
+            delete_all_documents(api, key["key"])
         counts = {}
         for path in files:
             status, _ = api.call("POST", "/v1/documents", key["key"], files=(path.name, path.read_bytes()))
@@ -130,6 +156,8 @@ def main():
     parser.add_argument("--local", action="store_true", help="also seed LaRA, for local evaluation only")
     parser.add_argument("--api", default=os.environ.get("RAG_API_URL", "http://localhost:8080"), help="API base URL")
     parser.add_argument("--timeout", type=int, default=3600, help="seconds to wait per tenant (default 3600)")
+    parser.add_argument("--reset", action="store_true",
+                        help="delete the tenants' documents first; needed after a LocalStack restart, which empties S3")
     args = parser.parse_args()
 
     admin = os.environ.get("ADMIN_TOKEN")
@@ -140,7 +168,7 @@ def main():
     for folder, corpus in CORPORA.items():
         if corpus["local"] and not args.local:
             continue
-        ok = seed(api, admin, folder, corpus, args.timeout) and ok
+        ok = seed(api, admin, folder, corpus, args.timeout, args.reset) and ok
     sys.exit(0 if ok else 1)
 
 

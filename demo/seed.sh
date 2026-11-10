@@ -4,7 +4,9 @@
 #
 #   ./demo/seed.sh            # the demo corpora: Kubernetes docs (en) and RAGTurk Wikipedia (tr)
 #   ./demo/seed.sh --local    # also LaRA, for local evaluation only; never run this against a deployed stack
+#   ./demo/seed.sh --reset    # delete the tenants' documents first: after a LocalStack restart, which empties S3
 #
+# Options can be combined; everything is passed on to seed.py, and --local to prepare.py too.
 # RAG_API_URL overrides the API address (default http://localhost:8080).
 set -euo pipefail
 
@@ -30,11 +32,13 @@ if [ -z "$python" ]; then
 fi
 
 local_flag=()
-if [ "${1:-}" = "--local" ]; then
-  local_flag=(--local)
-fi
+for arg in "$@"; do
+  if [ "$arg" = "--local" ]; then
+    local_flag=(--local)
+  fi
+done
 
 # -u: progress lines show up at once, even when the output goes to a file
 # the ${a[@]+...} form keeps an empty array working under set -u on bash 3.2 (macOS)
 "$python" -u -X utf8 "$root/demo/prepare.py" ${local_flag[@]+"${local_flag[@]}"}
-"$python" -u -X utf8 "$root/demo/seed.py" ${local_flag[@]+"${local_flag[@]}"}
+"$python" -u -X utf8 "$root/demo/seed.py" "$@"
