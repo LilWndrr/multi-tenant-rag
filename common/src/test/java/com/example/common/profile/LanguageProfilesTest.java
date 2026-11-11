@@ -53,6 +53,14 @@ class LanguageProfilesTest {
     }
 
     @Test
+    void missingEmbeddingDimensions_failsAtLoad() {
+        assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/dimensions/*.yaml"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("xx.yaml")
+                .hasMessageContaining("embedding-dimensions");
+    }
+
+    @Test
     void misspelledKey_failsAtLoad() {
         assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/typo/*.yaml"))
                 .isInstanceOf(IllegalStateException.class)

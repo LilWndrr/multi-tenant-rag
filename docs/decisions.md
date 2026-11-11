@@ -132,3 +132,29 @@ Short notes on choices the plan asks us to record: what, why, and the evidence.
   - `--local` (LaRA) has only been prepared, not uploaded.
 - **Seeded on 2026-11-10:** all 187 Kubernetes pages and 300 RAGTurk articles `ready` in about 20 minutes: 2,559 and 2,322 chunks, each with its vector; the RAGTurk chunks use the Turkish search config. 508 embedding calls succeeded, and the 521 per-minute 429s were all retried successfully. Running the seed again found all 487 files unchanged and made **0** model calls. Interrupted runs' seed keys are revoked on the next run.
 - **Considered:** NVIDIA's hosted API for the same model family. Not taken: its free tier is a one-off credit grant, it's scoped to prototyping, it needs a second provider in the gateway, and the two providers' vectors would have to be checked for compatibility (`input_type`, version, dimension).
+
+## Gate 2: Phase 2 checked end to end (2026-11-10)
+
+All four conditions hold, with the API, the worker and the real provider running locally:
+
+- **A 100-page PDF is ready within a few minutes, without slowing the API.** A 100-page PDF of real text (the seeded Kubernetes pages, laid out with PDFBox, 112 KB) went `queued` → `processing` at 1.0 s → `ready` at 9.2 s: 130 chunks, 130 vectors, 5 embedding calls, all `ok`. Upload answered 202 in 481 ms. `GET /v1/documents?limit=20` on the 187-document Kubernetes tenant, timed one request after another: worker idle p50 10.4 ms, p95 31.0 ms (300 requests); during ingestion p50 7.9 ms, p95 31.2 ms (553 requests). The worker is a separate process with its own database connections, so the API doesn't wait on it. Measured on one laptop, so absolute numbers are local; the point is that they don't change under ingestion.
+- **Re-uploads embed nothing.** Running the seed again found all 487 demo files unchanged and made 0 model calls (Task 19).
+- **A Turkish document is indexed with the Turkish text-search config.** All 2,322 RAGTurk chunks have `ts_config = turkish` (Task 19); `ParsingPipelineTest` checks it per profile.
+- **The cross-tenant test is green.** `RowLevelSecurityTest` and the other-tenant 404 tests in `DocumentTest` and `DocumentQueryTest` pass in CI.
+
+Noted while checking: the text came out of the PDF as one section, since a PDF has no headings Tika can see; the chunker still cut it by size into 130 chunks.
+
+## Task 20: the vector retriever, and what makes Postgres use the HNSW index (2026-11-11)
+
+- **`Retriever` interface**, with `VectorRetriever` the first implementation; full-text (Task 21) and hybrid (Task 22) come next, and Phase 4 compares them. A `RetrievedChunk` carries chunk id, document id, file name, heading path, content and a score; the score is cosine similarity (1 − distance), so higher is better for every retriever.
+- **The question is embedded with the profile's model,** the one the chunks were embedded with, since vectors from different models can't be compared. The call is logged in `model_calls` as `query-embedding`; the question text itself is never logged. It's embedded outside the database transaction, so a connection never waits on the provider.
+- **Three things the query needs, or the index isn't used** (`ChunkSearchRepository`):
+  1. **The index's exact expression:** `embedding::halfvec(n) <=> cast(:query as halfvec(n))`, ordered by it, then `limit`. `n` comes from the new `embedding-dimensions` in each profile (2048), so a model of another size is a profile change plus a migration for its index, not a code change.
+  2. **The model as a literal, not a bind parameter.** The index is partial (`where model = '…'`). With a bind parameter, the JDBC driver's generic plans after a few executions can't prove that condition, and silently stop using the index. The model comes from the classpath profile, not from users, and is checked against `[A-Za-z0-9._:/-]+` before going into the SQL.
+  3. **`set local hnsw.iterative_scan = relaxed_order`** in the same transaction. The index finds the nearest vectors of every tenant, and row-level security filters them afterwards; without iterative scanning it stops after its first candidates. Checked on the seeded database: for the 3-chunk test tenant, surrounded by thousands of other tenants' closer vectors, the index without it returned **0** rows, with it all 3. `relaxed_order` can return rows slightly out of order, so an outer query sorts them again.
+- **Evidence, on the seeded local database** (as `rag_app`, under row-level security, a stored chunk vector as the question):
+  - Kubernetes tenant (2,559 vectors among about 5,000): the planner chose `Index Scan using chunk_embeddings_nemotron_hnsw … Order By: ((embedding)::halfvec(2048) <=> …)` with the tenant as a filter (5 other-tenant rows removed); 133 ms cold, **2–3 ms warm**.
+  - A tenant with 3 chunks: the planner reads and sorts its few vectors instead, which is exact and cheaper; no index needed.
+  - `VectorRetrieverTest` (7): order and similarity, the limit, tenant isolation when another tenant has 60 closer chunks, the embedding call, a wrong-sized vector, a model id that could break out of the SQL, and the plan. The plan test turns off sequential scans and sorting, since with a few rows the planner rightly prefers them; it checks that the SQL's shape can use the index, while the seeded database shows the planner choosing it.
+- **Profile change:** `embeddingDimensions` is an `Integer`, not an `int`, because Jackson 3 rejects a missing `int` before our validation could name the field.
+- **To look at in Phase 4:** NVIDIA's retrieval embedders are often trained with separate query and passage modes (`input_type`, or `query:` / `passage:` prefixes). We send plain text both ways, and don't know what OpenRouter does by default.

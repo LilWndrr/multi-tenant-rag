@@ -4,6 +4,7 @@ package com.example.common.profile;
 public record LanguageProfile(
         String id,
         String embeddingModel,
+        Integer embeddingDimensions,
         String reranker,
         Chunk chunk,
         String textSearchConfig,
@@ -14,6 +15,6 @@ public record LanguageProfile(
     public record Prompts(String system, String noAnswer) {}
 
     LanguageProfile withId(String id) {
-        return new LanguageProfile(id, embeddingModel, reranker, chunk, textSearchConfig, prompts);
+        return new LanguageProfile(id, embeddingModel, embeddingDimensions, reranker, chunk, textSearchConfig, prompts);
     }
 }
