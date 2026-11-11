@@ -80,6 +80,10 @@ public class LanguageProfiles {
         }
         require(fileName, "prompts.system", p.prompts().system());
         require(fileName, "prompts.no-answer", p.prompts().noAnswer());
+        // an Integer, not an int: Jackson rejects a missing int before this check could name the field
+        if (p.embeddingDimensions() == null || p.embeddingDimensions() <= 0) {
+            throw new IllegalStateException(fileName + ": embedding-dimensions is missing or not positive");
+        }
     }
 
     private static void require(String fileName, String field, String value) {
