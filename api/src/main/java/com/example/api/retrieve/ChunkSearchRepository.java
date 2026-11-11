@@ -38,6 +38,64 @@ public class ChunkSearchRepository {
     }
 
 
+    public List<RetrievedChunk> matching(String textSearchConfig, String question, int limit) {
+        String parsed = jdbc.sql("select cast(websearch_to_tsquery(cast(:config as regconfig), :question) as text)")
+                .param("config", textSearchConfig)
+                .param("question", question)
+                .query(String.class)
+                .single();
+        TsQueries.Parts parts = TsQueries.split(parsed);
+        if (parts.isEmpty()) {
+            return List.of();   // only stop words or exclusions: nothing to search for
+        }
+        String sql = parts.excluded().isEmpty() ? MATCHING_SQL.formatted("") : MATCHING_SQL.formatted(EXCLUDING);
+        var query = jdbc.sql(sql)
+                .param("parts", String.join("\n", parts.wanted()))
+                .param("limit", limit);
+        if (!parts.excluded().isEmpty()) {
+            query = query.param("excluded", parts.anyExcluded());
+        }
+        return query.query((rs, n) -> new RetrievedChunk(
+                        rs.getLong("chunk_id"),
+                        rs.getObject("document_id", UUID.class),
+                        rs.getString("file_name"),
+                        rs.getString("heading_path"),
+                        rs.getString("content"),
+                        rs.getFloat("score")))
+                .list();
+    }
+
+
+    static final String MATCHING_SQL = """
+            with parts as (
+                select cast(p as tsquery) as part from unnest(string_to_array(:parts, chr(10))) p
+            ),
+            total as (
+                select count(*)::float8 as chunks from chunks
+            ),
+            weighted as (
+                select parts.part, ln(1 + (total.chunks - counts.df + 0.5) / (counts.df + 0.5)) as weight
+                from parts, total,
+                     lateral (select count(*)::float8 as df from chunks c where c.tsv @@ parts.part) counts
+                where counts.df > 0
+            ),
+            question as (
+                select sum(weight) as weight from weighted
+            )
+            select c.id as chunk_id, c.document_id, d.file_name, c.heading_path, c.content,
+                   sum(w.weight) / max(question.weight) as score
+            from chunks c
+            join documents d on d.id = c.document_id
+            join weighted w on c.tsv @@ w.part
+            cross join question
+            %s
+            group by c.id, c.document_id, d.file_name, c.heading_path, c.content
+            order by score desc, c.id
+            limit :limit
+            """;
+
+    private static final String EXCLUDING = "where not c.tsv @@ cast(:excluded as tsquery)";
+
     static String nearestSql(String model, int dimensions) {
         if (!MODEL_ID.matcher(model).matches()) {
             throw new IllegalArgumentException("unexpected characters in embedding model id: " + model);
@@ -57,4 +115,6 @@ public class ChunkSearchRepository {
                 order by distance
                 """.formatted(distance, model, distance);
     }
+
+
 }

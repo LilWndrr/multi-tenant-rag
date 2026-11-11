@@ -5,14 +5,14 @@ import com.example.common.model.ModelEmbedResponse;
 import com.example.common.model.ModelGateway;
 import com.example.common.profile.LanguageProfile;
 import com.example.common.tenant.TenantTransactions;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.UUID;
 
-// Embeds the question with the profile's model (the same one the chunks were embedded with, or the vectors can't be
-// compared) and asks Postgres for the nearest chunks. The question goes to the provider but is never logged.
-@Component
+
+@Component("vector-retriever")
 public class VectorRetriever implements Retriever {
 
     private final ModelGateway modelGateway;
