@@ -158,3 +158,30 @@ Noted while checking: the text came out of the PDF as one section, since a PDF h
   - `VectorRetrieverTest` (7): order and similarity, the limit, tenant isolation when another tenant has 60 closer chunks, the embedding call, a wrong-sized vector, a model id that could break out of the SQL, and the plan. The plan test turns off sequential scans and sorting, since with a few rows the planner rightly prefers them; it checks that the SQL's shape can use the index, while the seeded database shows the planner choosing it.
 - **Profile change:** `embeddingDimensions` is an `Integer`, not an `int`, because Jackson 3 rejects a missing `int` before our validation could name the field.
 - **To look at in Phase 4:** NVIDIA's retrieval embedders are often trained with separate query and passage modes (`input_type`, or `query:` / `passage:` prefixes). We send plain text both ways, and don't know what OpenRouter does by default.
+
+## Task 21: the full-text retriever, ranked by how rare the matched words are (2026-11-11)
+
+- **`FullTextRetriever`**, the second `Retriever`: Postgres full-text search with the profile's text-search config, no model call. It's there for exact strings that embeddings blur: ports, years, error codes, flags.
+- **OR, not AND.** `websearch_to_tsquery` ANDs every word, so a natural question ("how does the kubelet decide on eviction thresholds") rarely matches any single chunk. We let Postgres parse the question (stop words, stemming, `"phrases"`, `or`, `-exclusions`), then match chunks containing **any** of the wanted parts. Exclusions stay: a chunk with an excluded word never matches.
+- **Ranked by rarity, not by `ts_rank_cd`.** The first version ranked with Postgres's `ts_rank_cd`, which ignores how common a word is. On the seeded data that missed every exact term: for "What does OOMKilled mean for my container?", `contain` (in 734 Kubernetes chunks) outranked `oomkil` (in 2). So each wanted part is weighted by BM25's IDF, `ln(1 + (N − df + 0.5) / (df + 0.5))`, counted over the tenant's chunks (row-level security limits every count), and a chunk's score is the summed weight of the parts it contains, divided by the question's total, so 0..1. Term frequency and chunk length, the rest of BM25, are left out; chunks are all about the same size.
+- **The "done when", on the seeded tenants** (real question embeddings for the vector side, rank of the chunk holding the term in each top 20):
+
+  | Question | Vector | Full-text, `ts_rank_cd` | Full-text, by rarity |
+  |---|---|---|---|
+  | What runs on port 10250? | missed | missed | **1** |
+  | Which service listens on 2379? | missed | missed | **1** |
+  | What listens on 6443? | missed | 1 | **1** |
+  | 1517 yılında ne oldu? | missed | missed | **1** |
+  | 1511 tarihli eser hangisi? | 2 | missed | 2 |
+  | What does OOMKilled mean for my container? | 1 | missed | 1 |
+  | My pod shows ImagePullBackOff, what should I check? | 1 | missed | 1 |
+
+  So the two retrievers fail differently: the model handles distinctive words but loses bare numbers; rarity-ranked full-text keeps them. That's the case for Task 22's hybrid.
+- **Speed:** about 35 ms on the 2,559-chunk Kubernetes tenant, against 2–3 ms for the vector search. Postgres counts each word with a sequential scan at this size, which it judges cheaper than the GIN index. If tenants grow large, caching each tenant's word counts is the next step.
+- **Config:** the query uses the profile's text-search config, and each chunk's `tsv` was built with the config its tenant had at ingestion. They agree unless a tenant's profile changes later, in which case its documents need re-ingesting.
+- **Found while testing Turkish:**
+  - A capital `İ` folds to `i` correctly (`İstanbul` is found by `istanbul`), but a capital `I` folds to `i` too, not to Turkish `ı`, because the database's locale isn't Turkish. So a question typed `ırak` doesn't find a document's `Irak`. Fixing it means normalizing `ı`/`i` the same way on both sides for the Turkish profile, which changes every Turkish chunk's `tsv`; a follow-up, not part of this task.
+  - The Turkish stemmer cuts some question words very short (`kimdi` → `k`, `olan` → `ola`), which adds noise; rarity weighting keeps it from dominating.
+- **Found for versions:** `v1.31.2` and `1.31.2` are different tokens, so a question for one doesn't find the other.
+- **Query plan:** a plan test like Task 20's would need to force Postgres off plans that are genuinely cheaper on a few rows (it starts from the tenant's documents), which would test Postgres's cost model, not our SQL; the seeded-data timings above are the check instead.
+- **Tests:** `TsQueriesTest` (4) on the parts and exclusions, with real `websearch_to_tsquery` output; `FullTextRetrieverTest` (10): exact terms, any word being enough, a rare word outweighing a common one (fails with `ts_rank_cd`), exclusions, stemming with each profile, years and versions, the capital `İ`, tenant isolation, the limit, and stop-word-only questions.
