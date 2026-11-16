@@ -5,6 +5,7 @@ import com.example.common.model.ModelCall;
 import com.example.common.model.ModelChatResponse;
 import com.example.common.model.ModelEmbedResponse;
 import com.example.common.model.ModelGateway;
+import com.example.common.model.ModelRerankResponse;
 import com.example.common.model.Usage;
 
 import java.util.List;
@@ -40,6 +41,11 @@ public class FakeModelGateway implements ModelGateway {
 
     @Override
     public ModelChatResponse stream(ModelCall call, Consumer<String> onToken, List<ChatMessage> messages) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ModelRerankResponse rerank(ModelCall call, String query, List<String> documents) {
         throw new UnsupportedOperationException();
     }
 

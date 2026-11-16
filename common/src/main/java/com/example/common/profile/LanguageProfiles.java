@@ -67,8 +67,11 @@ public class LanguageProfiles {
         return profiles.keySet();
     }
 
-    // reranker may be null: not every profile has one yet
+    // reranker may be null (keep the retriever's order), but not blank: that would look like a model id to the gateway
     private static void validate(String fileName, LanguageProfile p) {
+        if (p.reranker() != null && p.reranker().isBlank()) {
+            throw new IllegalStateException(fileName + ": reranker is blank; use null for none");
+        }
         require(fileName, "embedding-model", p.embeddingModel());
         require(fileName, "text-search-config", p.textSearchConfig());
         if (p.chunk() == null || p.chunk().size() <= 0 || p.chunk().overlap() < 0

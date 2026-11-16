@@ -82,6 +82,29 @@ class ModelGatewayLiveTest {
     }
 
     @Test
+    void rerank_scoresEveryDocument_putsTheAnswerFirst_andLogsTokens() throws Exception {
+        String purpose = "test-" + UUID.randomUUID();
+        String model = new com.example.common.profile.LanguageProfiles().get("en").reranker();
+        ModelCall call = new ModelCall(null, purpose, model);
+
+        ModelRerankResponse response = gateway.rerank(call, "Which port does the kubelet API listen on?", List.of(
+                "etcd is a consistent key-value store for all cluster data.",
+                "The kubelet serves its API on port 10250.",
+                "Rome is famous for pizza al taglio."));
+
+        assertThat(response.scores()).extracting(ModelRerankResponse.Score::index).containsExactlyInAnyOrder(0, 1, 2);
+        ModelRerankResponse.Score best = response.scores().stream()
+                .max(java.util.Comparator.comparingDouble(ModelRerankResponse.Score::relevance)).orElseThrow();
+        assertThat(best.index()).isEqualTo(1);
+
+        Map<String, Object> row = jdbc.sql("select * from model_calls where purpose = :purpose")
+                .param("purpose", purpose)
+                .query().singleRow();
+        assertThat(row.get("status")).isEqualTo("ok");
+        assertThat(row.get("input_tokens")).isEqualTo(response.usage().inputTokens());
+    }
+
+    @Test
     void stream_deliversTokensAsTheyArrive_andLogsOnce() {
         String purpose = "test-" + UUID.randomUUID();
         ModelCall call = new ModelCall(null, purpose, chatModel);

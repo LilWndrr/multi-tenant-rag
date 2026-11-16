@@ -69,6 +69,14 @@ class LanguageProfilesTest {
     }
 
     @Test
+    void blankReranker_failsAtLoad() {
+        assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/reranker/*.yaml"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("xx.yaml")
+                .hasMessageContaining("reranker");
+    }
+
+    @Test
     void misspelledKey_failsAtLoad() {
         assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/typo/*.yaml"))
                 .isInstanceOf(IllegalStateException.class)

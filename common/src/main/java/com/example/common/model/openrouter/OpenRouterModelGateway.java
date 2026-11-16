@@ -36,13 +36,29 @@ public class OpenRouterModelGateway implements ModelGateway {
     private final EmbeddingModel embeddingModel;
     private final ModelCallLogger callLogger;
     private final OpenRouterRetry retry;
+    private final OpenRouterRerankClient rerankClient;
 
     public OpenRouterModelGateway(ChatModel chatModel, EmbeddingModel embeddingModel,
-                                  ModelCallLogger callLogger, OpenRouterRetry retry) {
+                                  ModelCallLogger callLogger, OpenRouterRetry retry,
+                                  OpenRouterRerankClient rerankClient) {
         this.chatModel = chatModel;
         this.embeddingModel = embeddingModel;
         this.callLogger = callLogger;
         this.retry = retry;
+        this.rerankClient = rerankClient;
+    }
+
+    @Override
+    public ModelRerankResponse rerank(ModelCall call, String query, List<String> documents) {
+        long start = System.nanoTime();
+        try {
+            ModelRerankResponse response = rerankClient.rerank(call.model(), query, documents);
+            callLogger.createModelCall(call, PROVIDER, response.model(), "ok", response.usage(), elapsedMs(start));
+            return response;
+        } catch (RuntimeException e) {
+            callLogger.createModelCall(call, PROVIDER, call.model(), "error", NO_USAGE, elapsedMs(start));
+            throw e;
+        }
     }
 
     @Override

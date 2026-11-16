@@ -1,0 +1,14 @@
+# valid except for a blank reranker
+embedding-model: some/model
+embedding-dimensions: 8
+reranker: " "
+chunk:
+  size: 100
+  overlap: 10
+text-search-config: simple
+retrieval:
+  min-vector-similarity: 0.3
+  min-text-score: 0.5
+prompts:
+  system: "answer"
+  no-answer: "none"

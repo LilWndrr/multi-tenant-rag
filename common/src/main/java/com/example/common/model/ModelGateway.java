@@ -10,4 +10,8 @@ public interface ModelGateway {
     ModelChatResponse stream(ModelCall call, Consumer<String> onToken , List<ChatMessage> messages);
 
     ModelEmbedResponse embed(ModelCall call, List<String> texts);
+
+    // Scores how well each document answers the query (a cross-encoder). One attempt, no retry: the caller has a
+    // fallback, and waiting to retry would only make the answer later.
+    ModelRerankResponse rerank(ModelCall call, String query, List<String> documents);
 }

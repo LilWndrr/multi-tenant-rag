@@ -41,7 +41,7 @@ class OpenRouterRetryTest {
     private final ModelCallLogger logger = mock(ModelCallLogger.class);
     // 1 ms backoff keeps the test fast; production uses 1 s
     private final OpenRouterModelGateway gateway = new OpenRouterModelGateway(
-            chatModel, mock(EmbeddingModel.class), logger, new OpenRouterRetry(4, 1));
+            chatModel, mock(EmbeddingModel.class), logger, new OpenRouterRetry(4, 1), mock(OpenRouterRerankClient.class));
 
     private static RateLimitException rateLimited() {
         return RateLimitException.builder().headers(Headers.builder().build()).build();

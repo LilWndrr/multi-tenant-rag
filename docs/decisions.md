@@ -77,7 +77,7 @@ Short notes on choices the plan asks us to record: what, why, and the evidence.
 - **What:** embeddings go through the gateway to OpenRouter, with the model taken from the tenant's language profile. This replaces the plan's second backend, `bge-m3` on a TEI container.
 - **Why:** one provider to run; the same setup locally and on AWS, where a local model would need extra compute; and no model to host. If free models fail too often, the fallback is a paid model on OpenRouter, which is a profile change, an index migration and a re-embed.
 - **Cost of this choice:** ingestion depends on OpenRouter and the model behind it, and document text goes to a third party. Check the chosen model's data policy before using anything beyond open corpora.
-- **Reranker:** Task 23 also moves off TEI. It needs a hosted reranker, on OpenRouter if a suitable one is available; not checked yet.
+- **Reranker:** Task 23 also moves off TEI. It needs a hosted reranker, on OpenRouter if a suitable one is available. (Done in Task 23: Cohere Rerank 5 Fast on OpenRouter.)
 - **Left in place:** the `bge-m3` index from `V2` stays, because migrations that have already run shouldn't be edited. It's unused and can be dropped by a later migration.
 - **Model:** `nvidia/nemotron-3-embed-1b:free`, measured at 2048 dimensions. Nemotron 3.5 Embed 1B was the first choice, but OpenRouter showed about 1% daily uptime for it on 2026-11-07, against 100% for this one. The listing says 3.5 shares its text embedding space with this model; compare real vectors before relying on that to skip a re-embed.
 - **`halfvec` index:** pgvector refuses an HNSW index on `vector` above 2000 dimensions, so `V4` casts to `halfvec(2048)`. The column doesn't change. Queries must use the same cast and model filter, or Postgres won't use the index. Models of 2000 dimensions or fewer use a plain `vector` index.
@@ -207,3 +207,32 @@ Noted while checking: the text came out of the PDF as one section, since a PDF h
 - **Full-text score fix:** the question's total weight now counts words found in no chunk too (they get the highest weight). Before, "best pizza in Rome" against the Kubernetes docs counted only `best`, so a chunk containing "best" scored a perfect 1.0. Ranking doesn't change, since the total is the same for every chunk; the score is now usable for the gate.
 - **Tests:** `ReciprocalRankFusionTest` (7): the formula, a chunk both lists like coming first, a chunk only one list found being kept, deduplication, ties, the limit. `HybridRetrieverTest` (7, retrievers mocked, thresholds from the real profile): an off-topic question gets no sources, either signal alone is enough, the threshold itself counts, the merge, 20 candidates each and the caller's limit. `LanguageProfilesTest`: a missing or out-of-range threshold fails at startup.
 - The two retrievers run one after the other; running them in parallel would save about the full-text query's time (~35 ms), small next to the embedding call.
+
+## Task 23: the reranker, Cohere Rerank 5 Fast through OpenRouter (2026-11-16)
+
+- **What:** a `Reranker` takes the hybrid retriever's 20 candidates and keeps the best few for the answer step. A cross-encoder reads the question and each chunk *together* and scores the pair, which orders the top few better than the vector similarity, the full-text score or the fused rank, none of which looks at both side by side.
+- **Classes:** `ModelReranker` (the default bean) sends the question plus each candidate's heading path and content, the same text that was embedded, in **one** request and sorts by the returned scores; equal scores keep the retriever's order. `NoOpReranker` keeps the retriever's order. The profile's `reranker:` names the model, and `null` means no-op. A blank value fails at startup.
+- **Failure keeps the retriever's order.** A timeout (5 s, `rag.models.rerank.timeout-ms`), an error status, or a response that doesn't score every candidate exactly once all fall back to the fused order: a worse order is better than no answer. No retry, since waiting to retry only delays the answer. The failure is logged with tenant id, candidate count and the HTTP status only, never question or chunk text, and the response body isn't read into the error because it may repeat them.
+- **Gateway:** `ModelGateway.rerank` calls OpenRouter's `POST /api/v1/rerank` with plain HTTP (`OpenRouterRerankClient`; Spring AI has no rerank model) and logs a `model_calls` row (`purpose = rerank`) like chat and embedding.
+- **Model choice, measured on the demo tenants** (same 20 fused candidates per question; "1st" = the file that answers the question ranks first):
+
+  | | `en` (25 labelled questions) | `tr` (40 RAGTurk questions) |
+  |---|---|---|
+  | Fused order only, 1st / top 3 | 15 / 20 | 36 / 38 |
+  | Cohere Rerank 5 Fast, 1st / top 3 | **21 / 25** | **39 / 39** |
+  | Cohere failures | 0 of 37 | 0 of 52 |
+  | Cohere wait, median / max | 0.47 s / 0.86 s | 0.46 s / 0.95 s |
+  | Free Nemotron 3.5 Rerank 8B | **23 of 37 requests rejected** | 39 / 39, 0 failures, median 3.5 s |
+
+  The right file was among the 20 candidates for 25 of 25 and 39 of 40 questions, so reranking only has to reorder. Cohere moved it up for 8 English and 3 Turkish questions; the 3 it moved down (English) stayed in the top 3.
+- **Why not the free NVIDIA model:** its endpoint screens input for "content safety" and answers HTTP 422 for about 1 in 15 Kubernetes chunks (a plain "Services without selectors" section, for one). One rejected chunk fails the whole request, so with 20 candidates most English questions failed. Turkish Wikipedia text was never rejected, but it's 7 times slower than Cohere there for the same ranking, and free endpoints come and go: the other free reranker (Llama Nemotron Rerank VL 1B) shut down on 2026-11-16.
+- **Cost:** Cohere Rerank 5 Fast is $0.02 per million tokens. A question's 20 chunks are about 8,000 tokens, so about $0.0001 per question (114 measurement calls cost $0.012).
+- **Scores as a "no answer" signal (not used yet):** Cohere's scores are calibrated 0–1, and the top score separates the groups far better than the Task 22 gate:
+
+  | Top rerank score | Answerable | Near misses | Off-topic |
+  |---|---|---|---|
+  | `en` | 0.707–0.901 | 0.019–0.397 | 0.001–0.009 |
+  | `tr` | 0.320–0.877 | 0.018–0.581 | 0.001–0.143 |
+
+  A per-profile minimum (about 0.5 for `en`, 0.2 for `tr`) would have blocked every off-topic question while keeping every answerable one, against 0 of 7 and 6 of 7 off-topic questions getting sources under today's gate. It applies only when the reranker call succeeds, and the samples are small (12 off-topic or near-miss questions per language), so it's left for the answer step's tuning or Phase 4's evaluation set.
+- **Tests:** `OpenRouterRerankClientTest` (6, a local HTTP server plays OpenRouter): the request's endpoint, key and fields, parsing scores, model and usage, an error status carrying only the status, the timeout, unusable responses. `OpenRouterRerankGatewayTest` (2): a call is logged with the provider's usage; a failure is logged once and not retried. `ModelRerankerTest` (7, gateway mocked): ordering and the limit, the text sent, ties, no reranker, no candidates, a failed call and a mismatched response falling back. `ModelGatewayLiveTest`: a real call ranks the right document first and logs its tokens. `LanguageProfilesTest`: a blank reranker fails at startup.
