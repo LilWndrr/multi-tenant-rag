@@ -61,6 +61,14 @@ class LanguageProfilesTest {
     }
 
     @Test
+    void missingRetrievalThresholds_failAtLoad() {
+        assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/retrieval/*.yaml"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("xx.yaml")
+                .hasMessageContaining("retrieval");
+    }
+
+    @Test
     void misspelledKey_failsAtLoad() {
         assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/typo/*.yaml"))
                 .isInstanceOf(IllegalStateException.class)

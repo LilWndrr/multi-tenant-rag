@@ -6,6 +6,9 @@ chunk:
   size: 400               # tokens, sized with jtokkit
   overlap: 50
 text-search-config: turkish   # Postgres regconfig for to_tsvector / websearch_to_tsquery
+retrieval:                # below both, a question gets no sources; similarities sit higher for this language (Task 22)
+  min-vector-similarity: 0.35
+  min-text-score: 0.6
 prompts:
   system: |
     Soruları yalnızca verilen bağlamı kullanarak yanıtla.

@@ -84,6 +84,14 @@ public class LanguageProfiles {
         if (p.embeddingDimensions() == null || p.embeddingDimensions() <= 0) {
             throw new IllegalStateException(fileName + ": embedding-dimensions is missing or not positive");
         }
+        if (p.retrieval() == null || !between0And1(p.retrieval().minVectorSimilarity())
+                || !between0And1(p.retrieval().minTextScore())) {
+            throw new IllegalStateException(fileName + ": retrieval needs min-vector-similarity and min-text-score, each 0 to 1");
+        }
+    }
+
+    private static boolean between0And1(Double value) {
+        return value != null && value >= 0 && value <= 1;
     }
 
     private static void require(String fileName, String field, String value) {

@@ -8,13 +8,19 @@ public record LanguageProfile(
         String reranker,
         Chunk chunk,
         String textSearchConfig,
+        Retrieval retrieval,
         Prompts prompts) {
 
     public record Chunk(int size, int overlap) {}
 
     public record Prompts(String system, String noAnswer) {}
 
+    // The hybrid retriever answers only when the best vector similarity or the best full-text score reaches its
+    // minimum; otherwise the question gets no sources. Per language, because the embedding model's similarities
+    // sit at different levels for each (docs/decisions.md, Task 22). Double, not double, so a missing value reaches our validation (see embeddingDimensions).
+    public record Retrieval(Double minVectorSimilarity, Double minTextScore) {}
+
     LanguageProfile withId(String id) {
-        return new LanguageProfile(id, embeddingModel, embeddingDimensions, reranker, chunk, textSearchConfig, prompts);
+        return new LanguageProfile(id, embeddingModel, embeddingDimensions, reranker, chunk, textSearchConfig, retrieval, prompts);
     }
 }
