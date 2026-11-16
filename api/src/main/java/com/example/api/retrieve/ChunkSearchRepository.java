@@ -77,7 +77,6 @@ public class ChunkSearchRepository {
                 select parts.part, ln(1 + (total.chunks - counts.df + 0.5) / (counts.df + 0.5)) as weight
                 from parts, total,
                      lateral (select count(*)::float8 as df from chunks c where c.tsv @@ parts.part) counts
-                where counts.df > 0
             ),
             question as (
                 select sum(weight) as weight from weighted

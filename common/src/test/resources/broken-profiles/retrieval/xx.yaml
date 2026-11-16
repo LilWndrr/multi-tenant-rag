@@ -1,0 +1,14 @@
+# valid except for a min-text-score outside 0..1
+embedding-model: some/model
+embedding-dimensions: 8
+reranker: null
+chunk:
+  size: 100
+  overlap: 10
+text-search-config: simple
+retrieval:
+  min-vector-similarity: 0.3
+  min-text-score: 5
+prompts:
+  system: "answer"
+  no-answer: "none"

@@ -185,3 +185,25 @@ Noted while checking: the text came out of the PDF as one section, since a PDF h
 - **Found for versions:** `v1.31.2` and `1.31.2` are different tokens, so a question for one doesn't find the other.
 - **Query plan:** a plan test like Task 20's would need to force Postgres off plans that are genuinely cheaper on a few rows (it starts from the tenant's documents), which would test Postgres's cost model, not our SQL; the seeded-data timings above are the check instead.
 - **Tests:** `TsQueriesTest` (4) on the parts and exclusions, with real `websearch_to_tsquery` output; `FullTextRetrieverTest` (10): exact terms, any word being enough, a rare word outweighing a common one (fails with `ts_rank_cd`), exclusions, stemming with each profile, years and versions, the capital `İ`, tenant isolation, the limit, and stop-word-only questions.
+
+## Task 22: the hybrid retriever and the "no answer" gate (2026-11-16)
+
+- **`HybridRetriever`** asks the vector and full-text retrievers for 20 candidates each and merges them with **reciprocal rank fusion**: a chunk scores 1 / (60 + rank) in each list it's in, summed. RRF uses positions only, because the two lists' scores (cosine similarity, full-text rarity) aren't on a common scale. A chunk both lists rank highly comes first, and one only a single list found (Task 21's port numbers) still gets in. Ties go to the better single rank, then the lower chunk id, so the order is stable. The fused scores are for ordering only.
+- **The gate:** before merging, the question gets **no sources** unless the best vector similarity **or** the best full-text score reaches the profile's minimum. Either is enough, since each retriever misses what the other finds. With no sources, the answer step says it doesn't know instead of answering from unrelated text.
+- **Thresholds per profile** (`retrieval:` in each YAML), chosen from real scores on the demo tenants. Best vector similarity / best full-text score per question:
+
+  | Group | Questions | Vector min–max | Full-text min–max | Get sources |
+  |---|---|---|---|---|
+  | `en` answerable (hand-written) | 20 | 0.206–0.702 | 0.737–1.000 | **20** |
+  | `en` off-topic (pizza, football, weather…) | 7 | 0.052–0.135 | 0.000–0.245 | **0** |
+  | `en` near misses (Swarm, Lambda, Redis, Terraform, JVM) | 5 | 0.182–0.488 | 0.304–0.829 | 3 |
+  | `tr` answerable (RAGTurk's own questions) | 25 | 0.403–0.811 | 0.188–1.000 | **25** |
+  | `tr` off-topic | 7 | 0.273–0.539 | 0.106–0.723 | 6 |
+  | `tr` near misses (topics not among the 300 articles) | 5 | 0.350–0.601 | 0.318–0.680 | 5 |
+
+  `en`: 0.25 / 0.5. Off-topic and answerable questions are far apart, and the one answerable question with a low similarity (port 10250, 0.206) has a perfect full-text score. `tr`: 0.35 / 0.6, set below every answerable question with a margin. Off-topic questions reach 0.539 here ("Bana bir film önerir misin?", against a tenant full of film articles), above some answerable ones (0.403), so for this language the gate only stops clearly unrelated questions.
+- **So the gate is a safety net, not the refusal mechanism.** Near misses get sources in both languages, and in `tr` most off-topic questions do. Refusing them is the answer step's job (Task 24: answer only from the sources, else say so), and that's what Gate 3's unanswerable questions test. Refusing an answerable question is the worse mistake, which is why the thresholds sit below every answerable one measured.
+- **The samples are small** (32 and 37 questions); Phase 4's evaluation set re-tunes these numbers.
+- **Full-text score fix:** the question's total weight now counts words found in no chunk too (they get the highest weight). Before, "best pizza in Rome" against the Kubernetes docs counted only `best`, so a chunk containing "best" scored a perfect 1.0. Ranking doesn't change, since the total is the same for every chunk; the score is now usable for the gate.
+- **Tests:** `ReciprocalRankFusionTest` (7): the formula, a chunk both lists like coming first, a chunk only one list found being kept, deduplication, ties, the limit. `HybridRetrieverTest` (7, retrievers mocked, thresholds from the real profile): an off-topic question gets no sources, either signal alone is enough, the threshold itself counts, the merge, 20 candidates each and the caller's limit. `LanguageProfilesTest`: a missing or out-of-range threshold fails at startup.
+- The two retrievers run one after the other; running them in parallel would save about the full-text query's time (~35 ms), small next to the embedding call.
