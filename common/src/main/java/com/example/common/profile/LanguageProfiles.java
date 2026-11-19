@@ -83,6 +83,11 @@ public class LanguageProfiles {
         }
         require(fileName, "prompts.system", p.prompts().system());
         require(fileName, "prompts.no-answer", p.prompts().noAnswer());
+        // without it the model is never told the exact sentence, and refusals can't be recognised
+        if (!p.prompts().system().contains(LanguageProfile.Prompts.NO_ANSWER_PLACEHOLDER)) {
+            throw new IllegalStateException(fileName + ": prompts.system must contain "
+                    + LanguageProfile.Prompts.NO_ANSWER_PLACEHOLDER);
+        }
         // an Integer, not an int: Jackson rejects a missing int before this check could name the field
         if (p.embeddingDimensions() == null || p.embeddingDimensions() <= 0) {
             throw new IllegalStateException(fileName + ": embedding-dimensions is missing or not positive");

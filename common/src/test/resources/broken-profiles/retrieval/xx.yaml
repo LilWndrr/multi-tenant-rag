@@ -10,5 +10,5 @@ retrieval:
   min-vector-similarity: 0.3
   min-text-score: 5
 prompts:
-  system: "answer"
+  system: "answer, else {no-answer}"
   no-answer: "none"

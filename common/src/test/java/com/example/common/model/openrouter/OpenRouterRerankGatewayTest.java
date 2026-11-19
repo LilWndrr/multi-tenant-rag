@@ -30,7 +30,7 @@ class OpenRouterRerankGatewayTest {
     private final OpenRouterRerankClient client = mock(OpenRouterRerankClient.class);
     private final ModelCallLogger logger = mock(ModelCallLogger.class);
     private final OpenRouterModelGateway gateway = new OpenRouterModelGateway(
-            mock(ChatModel.class), mock(EmbeddingModel.class), logger, new OpenRouterRetry(4, 1), client);
+            mock(ChatModel.class), mock(EmbeddingModel.class), logger, new OpenRouterRetry(4, 1), client, OpenRouterChatSettings.none());
 
     @Test
     void aSuccessfulCall_isLoggedWithTheProviderUsage() {

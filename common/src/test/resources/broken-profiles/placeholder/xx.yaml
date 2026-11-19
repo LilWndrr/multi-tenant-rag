@@ -1,0 +1,14 @@
+# valid except for a system prompt without the {no-answer} placeholder
+embedding-model: some/model
+embedding-dimensions: 8
+reranker: null
+chunk:
+  size: 100
+  overlap: 10
+text-search-config: simple
+retrieval:
+  min-vector-similarity: 0.3
+  min-text-score: 0.5
+prompts:
+  system: "answer"
+  no-answer: "none"

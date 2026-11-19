@@ -13,7 +13,15 @@ public record LanguageProfile(
 
     public record Chunk(int size, int overlap) {}
 
-    public record Prompts(String system, String noAnswer) {}
+    public record Prompts(String system, String noAnswer) {
+
+        public static final String NO_ANSWER_PLACEHOLDER = "{no-answer}";
+
+        // the system prompt as sent: the same text for every question of this profile
+        public String systemWithNoAnswer() {
+            return system.replace(NO_ANSWER_PLACEHOLDER, noAnswer);
+        }
+    }
 
     // The hybrid retriever answers only when the best vector similarity or the best full-text score reaches its
     // minimum; otherwise the question gets no sources. Per language, because the embedding model's similarities

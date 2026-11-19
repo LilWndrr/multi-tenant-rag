@@ -6,5 +6,5 @@ chunk:
   overlap: 10
 text-search-config: simple
 prompts:
-  system: "answer"
+  system: "answer, else {no-answer}"
   no-answer: "none"

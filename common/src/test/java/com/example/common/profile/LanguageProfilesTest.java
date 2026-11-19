@@ -77,6 +77,23 @@ class LanguageProfilesTest {
     }
 
     @Test
+    void systemPromptWithoutTheNoAnswerPlaceholder_failsAtLoad() {
+        assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/placeholder/*.yaml"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("xx.yaml")
+                .hasMessageContaining("{no-answer}");
+    }
+
+    // the refusal sentence the model is told to give is the one the code recognises
+    @Test
+    void theSystemPromptAsSent_containsTheNoAnswerSentence() {
+        for (String id : profiles.ids()) {
+            LanguageProfile.Prompts prompts = profiles.get(id).prompts();
+            assertThat(prompts.systemWithNoAnswer()).contains(prompts.noAnswer()).doesNotContain("{no-answer}");
+        }
+    }
+
+    @Test
     void misspelledKey_failsAtLoad() {
         assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/typo/*.yaml"))
                 .isInstanceOf(IllegalStateException.class)

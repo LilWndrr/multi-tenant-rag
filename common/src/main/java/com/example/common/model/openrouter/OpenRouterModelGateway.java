@@ -37,15 +37,17 @@ public class OpenRouterModelGateway implements ModelGateway {
     private final ModelCallLogger callLogger;
     private final OpenRouterRetry retry;
     private final OpenRouterRerankClient rerankClient;
+    private final OpenRouterChatSettings chatSettings;
 
     public OpenRouterModelGateway(ChatModel chatModel, EmbeddingModel embeddingModel,
                                   ModelCallLogger callLogger, OpenRouterRetry retry,
-                                  OpenRouterRerankClient rerankClient) {
+                                  OpenRouterRerankClient rerankClient, OpenRouterChatSettings chatSettings) {
         this.chatModel = chatModel;
         this.embeddingModel = embeddingModel;
         this.callLogger = callLogger;
         this.retry = retry;
         this.rerankClient = rerankClient;
+        this.chatSettings = chatSettings;
     }
 
     @Override
@@ -64,7 +66,7 @@ public class OpenRouterModelGateway implements ModelGateway {
     @Override
     public ModelChatResponse chat(ModelCall call, List<ChatMessage> messages) {
         Prompt prompt = new Prompt(toSpringMessages(messages),
-                OpenAiChatOptions.builder().model(call.model()).build());
+                OpenAiChatOptions.builder().model(call.model()).extraBody(chatSettings.extraBody()).build());
         return retry.execute(() -> chatAttempt(call, prompt));
     }
 
@@ -90,7 +92,7 @@ public class OpenRouterModelGateway implements ModelGateway {
     @Override
     public ModelChatResponse stream(ModelCall call, Consumer<String> onToken , List<ChatMessage> messages) {
         Prompt prompt = new Prompt(toSpringMessages(messages),
-                OpenAiChatOptions.builder().streamUsage(true).model(call.model()).build());
+                OpenAiChatOptions.builder().streamUsage(true).model(call.model()).extraBody(chatSettings.extraBody()).build());
         AtomicBoolean delivered = new AtomicBoolean(false);
         try {
             return retry.execute(() -> streamAttempt(call, prompt, onToken, delivered));
