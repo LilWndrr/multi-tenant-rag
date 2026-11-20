@@ -259,3 +259,21 @@ Noted while checking: the text came out of the PDF as one section, since a PDF h
 - **Not handled yet:** an answer that cites nothing is still `answered`; Phase 4's evaluation counts how often that happens. The answer streams as it comes, so a reply can't be checked before the user sees it; with this model and prompt a leak didn't happen in 18 tries.
 - **Tests:** `AnswerPromptTest` (5): the same system message for every question, each profile's own prompt, numbering, file and heading, the question last, our tags neutralised, other angle brackets kept. `CitationsTest` (6): order and duplicates, grouped and adjacent markers, numbers without a source, the no-answer sentence with small differences, a longer reply not taken for it. `GeneratorTest` (4, gateway mocked): no sources means no call, an answer with its citations, a refusal, the model and prompt sent. `OpenRouterChatSettingsTest` (2). `LanguageProfilesTest`: the placeholder is required and filled. `GeneratorLiveTest` (6, real model, with the key): a cited answer, a refusal, an injection refused without showing the prompt, a planted instruction ignored, `tr` answered and an injection refused, and cached tokens in `model_calls` on a repeat.
 
+
+## Task 25: `POST /v1/chat` with server-sent events (2026-11-20)
+
+- **What:** `POST /v1/chat` with `{"question": "…"}` and the tenant's API key runs the whole pipeline (`ChatService`): hybrid retrieval of 20 candidates, reranking down to 6 (`rag.chat.sources`, within the plan's 5 to 8), then the generator. The tenant and its language profile come from the key, never from the request.
+- **Events,** `text/event-stream`, each with JSON data:
+  - `token` `{"text": " retry"}` as the model writes. JSON rather than bare text because SSE drops one leading space after `data:`, so bare tokens would lose the spaces between words.
+  - `citations` `{"answered": true, "citations": [{"number", "chunkId", "documentId", "document", "heading", "snippet"}]}`, always last. `number` is the `[n]` in the text; the snippet is the chunk's first 200 characters on one line, cut at a word. A refusal ends with `answered: false` and no citations.
+  - `error` `{"message": "…"}` if the answer fails part way. Headers are sent before the model starts, so a failure can't become a status code; the message is generic and the cause is logged.
+- **Before streaming:** no or wrong key 401 (the existing filter), a blank question or one over 2,000 characters 400, both without a model call.
+- **Threads:** each answer runs on its own virtual thread; it spends nearly all its time waiting on the network. `TenantContext` is request-scoped, so the tenant id and profile are read on the request thread and passed in.
+- **Client leaving:** sending to a closed connection throws from the token callback, which stops the model's stream, so no more tokens are paid for. The log says "the client left". Its `model_calls` row is `error` with no token counts, because the gateway only learns usage at the end of a stream; Task 26's usage roll-up undercounts these.
+- **Logging:** tenant id, answered, citation count, total time. Never the question or the answer.
+- **Measured on the demo tenants** (2026-11-20, real providers):
+  - `en` "How many times does a Job retry a failed Pod…": the correct answer citing the Job backoff section, first token after 3.3 s, done in 4.3 s. Asked again: 2,688 cached prompt tokens, but the first token took 5.8 s because the reranker took 4.7 s that time (0.5 to 0.9 s usually; the timeout is 5 s).
+  - `tr` "Alki Larnaca kulübünden ne zaman puan silindi?": answered with 3 citations in 2.7 s.
+  - "What is the best pizza place in Rome?": the no-answer sentence in 0.6 s, no answer-model call.
+  - Time to first token is embedding plus both searches plus reranking plus the model's first token. Embedding and reranking vary most; Phase 4's latency figures (p50, p95) come from `model_calls`.
+- **Tests:** `ChatControllerTest` (6, service mocked): tokens in order with spaces kept and the citations event last with every field, the key's tenant and profile used and the question trimmed, a refusal, an error event after some tokens without the cause, 401 without a key, 400 for blank, missing and too-long questions. `ChatServiceTest` (2): 20 candidates, reranked to 6, only those reach the generator. `ChatEventsTest` (3): snippets.
