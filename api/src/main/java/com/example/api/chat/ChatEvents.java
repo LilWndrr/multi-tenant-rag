@@ -14,10 +14,15 @@ public final class ChatEvents {
     private ChatEvents() {
     }
 
-    // event: token
-    public record Token(String text) {}
 
-    // event: citations, the last event. answered is false for the no-answer reply, and then citations is empty.
+    public record Token(String text) {
+        @Override
+        public String toString() {
+            return "Token[" + text.length() + " chars]";
+        }
+    }
+
+
     public record Citations(boolean answered, List<Citation> citations) {
 
         static Citations of(Answer answer) {
@@ -31,6 +36,11 @@ public final class ChatEvents {
         static Citation of(Answer.Citation c) {
             return new Citation(c.number(), c.chunk().id(), c.chunk().documentId(), c.chunk().fileName(),
                     c.chunk().headingPath(), snippetOf(c.chunk().content(), SNIPPET_LENGTH));
+        }
+
+        @Override
+        public String toString() {
+            return "Citation[number=" + number + ", chunkId=" + chunkId + "]";
         }
     }
 
