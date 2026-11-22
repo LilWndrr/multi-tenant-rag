@@ -51,8 +51,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ExtendWith(OutputCaptureExtension.class)
 class QuestionNotLoggedTest {
 
-    private static final String MARKER = "Quokkafjord" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
-    private static final String QUESTION = "What does the " + MARKER + " setting control?";
+    // one per test: when a test fails, MockMvc prints its request, which would put its marker in the next test's output
+    private final String marker = "Quokkafjord" + UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+    private final String question = "What does the " + marker + " setting control?";
 
     @Autowired
     MockMvc mvc;
@@ -74,12 +75,12 @@ class QuestionNotLoggedTest {
     void aQuestionThroughTheWholePipeline_isInNoLogLine_andNoTable(CapturedOutput output) throws Exception {
         UUID tenant = tenantService.create("t-" + UUID.randomUUID(), "en").id();
         String key = apiKeyService.create(tenant, "website").key();
-        addChunk(tenant, "The " + MARKER + " setting controls how often the scheduler runs.");
-        providerAnswers("It controls how often the scheduler runs [1]. " + MARKER + " is a setting.");
+        addChunk(tenant, "The " + marker + " setting controls how often the scheduler runs.");
+        providerAnswers("It controls how often the scheduler runs [1]. " + marker + " is a setting.");
 
         MvcResult result = mvc.perform(post("/v1/chat").header("Authorization", "Bearer " + key)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"question\": \"" + QUESTION + "\"}"))
+                        .content("{\"question\": \"" + question + "\"}"))
                 .andExpect(request().asyncStarted())
                 .andReturn();
         result.getAsyncResult(5_000);
@@ -89,8 +90,8 @@ class QuestionNotLoggedTest {
         verify(modelGateway).stream(any(), any(), anyList());
         assertThat(output.getAll()).contains("Chat for tenant " + tenant);
 
-        assertThat(output.getAll()).doesNotContain(MARKER);
-        assertThat(tablesContaining(tenant, QUESTION)).isEmpty();
+        assertThat(output.getAll()).doesNotContain(marker);
+        assertThat(tablesContaining(tenant, question)).isEmpty();
     }
 
     // a broken body is refused, and the parser's error message doesn't carry its text into the log
@@ -100,10 +101,10 @@ class QuestionNotLoggedTest {
 
         mvc.perform(post("/v1/chat").header("Authorization", "Bearer " + key)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"question\": " + MARKER + " was it?}"))
+                        .content("{\"question\": " + marker + " was it?}"))
                 .andExpect(status().isBadRequest());
 
-        assertThat(output.getAll()).doesNotContain(MARKER);
+        assertThat(output.getAll()).doesNotContain(marker);
     }
 
     private void providerAnswers(String answer) {

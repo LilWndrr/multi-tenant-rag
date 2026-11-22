@@ -71,9 +71,10 @@ public class ChatController implements DisposableBean {
             Answer answer = chatService.answer(tenantId, profile, question,
                     token -> send(emitter, "token", new ChatEvents.Token(token)));
             send(emitter, "citations", ChatEvents.Citations.of(answer));
-            emitter.complete();
+            // logged before complete(), so the line is written by the time the client sees the stream end
             log.info("Chat for tenant {}: answered={}, {} citations, {} ms", tenantId, answer.answered(),
                     answer.citations().size(), (System.nanoTime() - start) / 1_000_000);
+            emitter.complete();
         } catch (RuntimeException e) {
             if (clientGone(e)) {
 
