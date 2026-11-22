@@ -35,7 +35,6 @@ public class ChatController implements DisposableBean {
     private final ChatService chatService;
     private final TenantContext tenantContext;
     private final LanguageProfiles profiles;
-    // each answer waits on the network most of the time, so a virtual thread per answer
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     public ChatController(ChatService chatService, TenantContext tenantContext, LanguageProfiles profiles) {
@@ -44,7 +43,13 @@ public class ChatController implements DisposableBean {
         this.profiles = profiles;
     }
 
-    public record ChatRequest(String question) {}
+    // Spring's DEBUG logging prints the request body object; the question must never reach a log (Task 26)
+    public record ChatRequest(String question) {
+        @Override
+        public String toString() {
+            return "ChatRequest[question=" + (question == null ? "null" : question.length() + " chars") + "]";
+        }
+    }
 
     @PostMapping(path = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> chat(@RequestBody ChatRequest request) {
@@ -52,7 +57,6 @@ public class ChatController implements DisposableBean {
         if (question.isEmpty() || question.length() > MAX_QUESTION_LENGTH) {
             return ResponseEntity.badRequest().build();
         }
-        // TenantContext belongs to this request thread; the answer is written from another one
         UUID tenantId = tenantContext.getTenantId();
         LanguageProfile profile = profiles.get(tenantContext.getLanguageProfile());
 
@@ -72,7 +76,7 @@ public class ChatController implements DisposableBean {
                     answer.citations().size(), (System.nanoTime() - start) / 1_000_000);
         } catch (RuntimeException e) {
             if (clientGone(e)) {
-                // throwing from the token callback stops the model's stream, so no more tokens are paid for
+
                 log.info("Chat for tenant {}: the client left after {} ms", tenantId, (System.nanoTime() - start) / 1_000_000);
                 emitter.complete();
                 return;
@@ -91,7 +95,6 @@ public class ChatController implements DisposableBean {
         try {
             emitter.send(SseEmitter.event().name(name).data(data, MediaType.APPLICATION_JSON));
         } catch (IOException | IllegalStateException e) {
-            // IOException: the connection is closed; IllegalStateException: the emitter already timed out
             throw new ClientGoneException(e);
         }
     }
