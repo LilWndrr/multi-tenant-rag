@@ -1,0 +1,15 @@
+# valid except for a locale that is not a language tag
+embedding-model: some/model
+embedding-dimensions: 8
+reranker: null
+chunk:
+  size: 100
+  overlap: 10
+text-search-config: simple
+locale: "not a tag!"
+retrieval:
+  min-vector-similarity: 0.3
+  min-text-score: 0.5
+prompts:
+  system: "answer, else {no-answer}"
+  no-answer: "none"

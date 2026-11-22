@@ -5,6 +5,7 @@ chunk:
   size: 100
   overlap: 10
 text-search-config: simple
+locale: xx
 prompts:
   system: "answer, else {no-answer}"
   no-answer: "none"

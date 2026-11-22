@@ -3,8 +3,10 @@ package com.example.api;
 import org.springframework.boot.flyway.autoconfigure.FlywayConnectionDetails;
 import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.context.DynamicPropertyRegistrar;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.localstack.LocalStackContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -43,6 +45,13 @@ public class TestcontainersConfiguration {
                 // like the compose healthcheck: ready once the init script has created the last queue
                 .waitingFor(Wait.forSuccessfulCommand("awslocal sqs get-queue-url --queue-name ingestion")
                         .withStartupTimeout(Duration.ofMinutes(2)));
+    }
+
+    // the answer cache; same image as compose.yaml
+    @Bean
+    @ServiceConnection(name = "redis")
+    GenericContainer<?> redis() {
+        return new GenericContainer<>(DockerImageName.parse("redis:7")).withExposedPorts(6379);
     }
 
     @Bean

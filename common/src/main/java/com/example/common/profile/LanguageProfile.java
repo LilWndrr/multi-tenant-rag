@@ -1,5 +1,7 @@
 package com.example.common.profile;
 
+import java.util.Locale;
+
 // One profiles/<id>.yaml file; id comes from the file name
 public record LanguageProfile(
         String id,
@@ -8,6 +10,7 @@ public record LanguageProfile(
         String reranker,
         Chunk chunk,
         String textSearchConfig,
+        String locale,
         Retrieval retrieval,
         Prompts prompts) {
 
@@ -29,6 +32,12 @@ public record LanguageProfile(
     public record Retrieval(Double minVectorSimilarity, Double minTextScore) {}
 
     LanguageProfile withId(String id) {
-        return new LanguageProfile(id, embeddingModel, embeddingDimensions, reranker, chunk, textSearchConfig, retrieval, prompts);
+        return new LanguageProfile(id, embeddingModel, embeddingDimensions, reranker, chunk, textSearchConfig, locale, retrieval, prompts);
+    }
+
+    // locale is a BCP 47 tag ("en", "tr"): case rules differ by language (tr has a dotted and a dotless i), so text is
+    // lowercased with the profile's locale, never the default one
+    public Locale textLocale() {
+        return Locale.forLanguageTag(locale);
     }
 }

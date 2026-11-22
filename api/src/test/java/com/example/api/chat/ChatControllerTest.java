@@ -67,7 +67,7 @@ class ChatControllerTest {
             for (String token : tokens) {
                 onToken.accept(token);
             }
-            return answer;
+            return new ChatReply(answer.text(), ChatEvents.Citations.of(answer), false);
         });
     }
 

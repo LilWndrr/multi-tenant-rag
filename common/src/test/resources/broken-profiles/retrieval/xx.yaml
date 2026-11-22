@@ -6,6 +6,7 @@ chunk:
   size: 100
   overlap: 10
 text-search-config: simple
+locale: xx
 retrieval:
   min-vector-similarity: 0.3
   min-text-score: 5

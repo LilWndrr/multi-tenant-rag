@@ -22,6 +22,7 @@ class LanguageProfilesTest {
             assertThat(p.id()).isEqualTo(id);
             assertThat(p.embeddingModel()).isNotBlank();
             assertThat(p.textSearchConfig()).isNotBlank();
+            assertThat(p.textLocale().getLanguage()).isEqualTo(id);
             assertThat(p.chunk().size()).isPositive();
             assertThat(p.chunk().overlap()).isNotNegative().isLessThan(p.chunk().size());
             assertThat(p.prompts().system()).isNotBlank();
@@ -91,6 +92,13 @@ class LanguageProfilesTest {
             LanguageProfile.Prompts prompts = profiles.get(id).prompts();
             assertThat(prompts.systemWithNoAnswer()).contains(prompts.noAnswer()).doesNotContain("{no-answer}");
         }
+    }
+
+    @Test
+    void aLocaleThatIsNotALanguageTag_failsAtLoad() {
+        assertThatThrownBy(() -> new LanguageProfiles("classpath*:broken-profiles/locale/*.yaml"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("locale");
     }
 
     @Test

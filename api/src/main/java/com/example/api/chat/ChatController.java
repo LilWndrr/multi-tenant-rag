@@ -1,6 +1,5 @@
 package com.example.api.chat;
 
-import com.example.api.answer.Answer;
 import com.example.api.tenant.TenantContext;
 import com.example.common.profile.LanguageProfile;
 import com.example.common.profile.LanguageProfiles;
@@ -68,12 +67,13 @@ public class ChatController implements DisposableBean {
     private void answer(SseEmitter emitter, UUID tenantId, LanguageProfile profile, String question) {
         long start = System.nanoTime();
         try {
-            Answer answer = chatService.answer(tenantId, profile, question,
+            ChatReply reply = chatService.answer(tenantId, profile, question,
                     token -> send(emitter, "token", new ChatEvents.Token(token)));
-            send(emitter, "citations", ChatEvents.Citations.of(answer));
+            send(emitter, "citations", reply.citations());
             // logged before complete(), so the line is written by the time the client sees the stream end
-            log.info("Chat for tenant {}: answered={}, {} citations, {} ms", tenantId, answer.answered(),
-                    answer.citations().size(), (System.nanoTime() - start) / 1_000_000);
+            log.info("Chat for tenant {}: answered={}, {} citations, cached={}, {} ms", tenantId,
+                    reply.citations().answered(), reply.citations().citations().size(), reply.cached(),
+                    (System.nanoTime() - start) / 1_000_000);
             emitter.complete();
         } catch (RuntimeException e) {
             if (clientGone(e)) {

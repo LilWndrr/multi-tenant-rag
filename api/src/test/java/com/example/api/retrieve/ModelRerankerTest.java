@@ -38,9 +38,9 @@ class ModelRerankerTest {
     ModelRerankerTest() throws IOException {
         LanguageProfile en = new LanguageProfiles().get("en");
         withReranker = new LanguageProfile(en.id(), en.embeddingModel(), en.embeddingDimensions(), "some/reranker",
-                en.chunk(), en.textSearchConfig(), en.retrieval(), en.prompts());
+                en.chunk(), en.textSearchConfig(), en.locale(), en.retrieval(), en.prompts());
         without = new LanguageProfile(en.id(), en.embeddingModel(), en.embeddingDimensions(), null,
-                en.chunk(), en.textSearchConfig(), en.retrieval(), en.prompts());
+                en.chunk(), en.textSearchConfig(), en.locale(), en.retrieval(), en.prompts());
     }
 
     @Test
